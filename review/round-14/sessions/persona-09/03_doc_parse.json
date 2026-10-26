@@ -1,0 +1,22 @@
+{
+ "status": 200,
+ "content": [
+  "## 养护\n\n| 花卉 | 浇水 | 日照 |\n| --- | --- | --- |\n| 月季 | 隔日 | 全日照 |\n| 绣球 | 每日 | 半阴 |"
+ ],
+ "url": "file:///<server cwd>/review/round-14/sessions/files/care_table.xlsx",
+ "fetcher_used": "parse",
+ "duration_ms": 309,
+ "error": "",
+ "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+ "total_size_bytes": 4973,
+ "total_extracted_chars": 78,
+ "summary": "200 OK · 78B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:15:49Z",
+ "approx_tokens": 35,
+ "_wall_s": 0.33,
+ "_tool": "doc_parse",
+ "_tag": "p09-S2-本地养护表 xlsx#03",
+ "_ts": "2026-10-26T03:15:49.101909+00:00"
+}

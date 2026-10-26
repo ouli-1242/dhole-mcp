@@ -1,0 +1,30 @@
+[p08 马小川·体育数据分析] session a18f56f54f114a088a920f72d56b79d3 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p08-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p08 S1-feed 6h 增量 ----
+[p08-S1-feed 6h 增量#02] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 3 items, newest first · fetched live at 2026-10-26T0
+   since=2026-10-25T21:14:26.436741+00:00 older=5 nodate=2 items=3
+      (pause 6s - throttle)
+
+---- p08 S2-feed 混发（好源+404） ----
+[p08-S2-feed 混发（好源+404）#03] feed_read   0.0s ok=None err=-  chars=
+      summary: 2 URLs asked · 2 rows answered · 1 rows carried 2 items, newest first · 1 rows errored (http://127.0
+   2 URLs asked · 2 rows answered · 1 rows carried 2 items, newest first · 1 rows errored (http://127.0.0.1:8399/feed-404.xml - each row names its own error and diagnosis) · fetched live at 2026-10-26T03:14:32Z - this path 
+   - {'source_url': 'http://127.0.0.1:8399/feed.xml', 'items': [{'title': '靶站条目 1（0 天 
+   - {'source_url': 'http://127.0.0.1:8399/feed-404.xml'} http_error_404: server returned error status
+      (pause 12s - throttle)
+
+---- p08 S3-search max_results=0（clamp） ----
+[p08-S3-search max_results=0（clamp）#04] web_search   2.6s ok=None err=-  chars=
+      summary: Searched 'football league standings' -> 1 results (1 high, 0 med, 0 low) from so360,sogou,shenma,bai
+   Searched 'football league standings' -> 1 results (1 high, 0 med, 0 low) from so360,sogou,shenma,baidu,yandex; rerank=neural. | max_results=0 is outside the supported 1-50 range; returning at most 1
+      (pause 6s - throttle)
+
+---- p08 S4-战报页读两遍 ----
+[p08-S4-战报页读两遍#05] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p08-S4-战报页读两遍#06] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fet
+   cached=None->True same_ts=True
+P08 DONE

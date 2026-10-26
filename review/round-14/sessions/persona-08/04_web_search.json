@@ -1,0 +1,134 @@
+{
+ "query": "football league standings",
+ "results": [
+  {
+   "title": "Premier League Standings & League Table, Football England",
+   "url": "https://www.oddsportal1.com/football/england/premier-league/standings/",
+   "snippet": "Stay updated and follow the current Premier League Standings & League Table with OddsPortal.Football. Basketball. Tennis. Baseball. Hockey. American football.",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9522808047109116,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 5 (partial_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 1,
+ "engines_used": [
+  "so360",
+  "sogou",
+  "shenma",
+  "baidu",
+  "yandex"
+ ],
+ "engine_preempted": [
+  "duckduckgo",
+  "bing",
+  "bing_global",
+  "brave",
+  "marginalia",
+  "yahoo",
+  "seznam"
+ ],
+ "engine_detail": [
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "4 usable rows from 7 item nodes"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "11 usable rows from 11 item nodes"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "8 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "5 of 9 (5 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "partial_pool",
+ "duration_ms": 2598,
+ "error": "",
+ "fetch_hint": "1 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call).",
+ "summary": "Searched 'football league standings' -> 1 results (1 high, 0 med, 0 low) from so360,sogou,shenma,baidu,yandex; rerank=neural. | max_results=0 is outside the supported 1-50 range; returning at most 1",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. duckduckgo, bing, bing_global, brave, marginalia, yahoo, seznam were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.62,
+ "_tool": "web_search",
+ "_tag": "p08-S3-search max_results=0（clamp）#04",
+ "_ts": "2026-10-26T03:14:47.092129+00:00"
+}

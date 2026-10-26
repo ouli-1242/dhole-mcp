@@ -130,3 +130,30 @@
 - P6：四件资产 + backlog E13-E16 + decisions 更新后提交。
 - **循环停止**：用户明确指示「做完 r13 就停止，不要继续循环」——P7/round-14 不启动。
   common-issues 的 round-13 必测回归点仍保留为「下一轮若继续」的输入。
+
+### round-14 收官（2026-10-26 · 循环重启）
+
+- **前提变化**：用户重启循环，并告知**另一位 agent 正在并发改代码/注释**——不打扰、不提交、
+  不回滚其未提交改动。P0 不执行 WIP commit/切基线，直接 `git switch -c review/round-14`
+  （工作树零改动），被测对象 = 当前工作树（editable，含对方在途特性）。P6 只暂存 review/
+  本轮资产，不整文件吞其改动（backlog.md 含其状态更新，本轮不暂存）。
+- 主题「回访与新鲜度」：10 新职业（L1×3/L2×5/L3×2），**78 发 13/13 工具**
+  （主跑 63 + 补条 15 p11-p13）。主轴：cache_ttl 回放 / check 两相 / 相对 since /
+  offset 续片 / recall / 会话连续性。
+- **0 CONFIRM（第四个零修复轮，非连续）**——10 候选全 REJECT：
+  - R14-001 **自推翻**：offset 续片 `473B of 7.0KB` 首报「不点名切片」，重读在途测试
+    `test_an_offset_window_summary_names_the_slice.py` 发现逐字命中契约。教训与 r08/r09/r12
+    的「量具截断」同族：判形状前先读在途测试/契约。
+  - 5 条 E（recall 变体 E2/E6 复发、doc_parse summary 不说 pages、discover path_include
+    种子行、discover `max_depth` 手册漂移、L1 工程词）；1 条 A（p07 按旧手册误用）；
+    1 条 harness（driver 600 字截断）。
+  - 正向实锤：相对 since 三档 / cache_ttl=0 回源 / check baseline→changed / offset 窗口 /
+    批量读逐行 cached 全部成立（R14-010 PASS）。
+- P4：无修复（0 CONFIRM）。
+- P5：真重启 **pid 16212→23964**（fixture 8399 不动）；V1-V5 全 PASS（相对 since /
+  缓存回放同 fetched_at / check 两相 / offset 窗口 / r13 三件回归）；全量 pytest
+  **7844 passed, 23 skipped**（工作树含对方在途测试；r13 7775+69 对账平）；ruff 16 基线。
+- 并发纪律：P3 的两条文档 E 正落在对方编辑路径（tools.md/troubleshooting.md），明确不碰；
+  待其落地后下一轮同步手册。
+- 下一步：round-15 P0（端口 9215；从本轮顶端切出；先读 common-issues 的 round-14 必测回归点；
+  继续只读不写对方文件）。

@@ -1,0 +1,148 @@
+{
+ "query": "data update frequency reporting",
+ "results": [
+  {
+   "title": "Data Update Frequency | StrongBuyAnalytics",
+   "url": "https://strongbuyanalytics.com/update-frequency",
+   "snippet": "Data Update Frequency. Knowing how fresh your data is matters.Update Frequency. Notes. AI Stock Reports (PDF). On demand. Generated fresh with latest data each time you request a report. Strong Buy Score.",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9941078059229747,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Script Update Frequency Data and Versioning... - Soft Data Index",
+   "url": "https://softdataindex.com/script-update-frequency-data-and-versioning-lifecycle-stats/",
+   "snippet": "Script update frequency data represents the primary telemetry metric for evaluating the operational health and lifecycle stability of automated infrastructure.",
+   "source": "yandex",
+   "position": 2,
+   "relevance_score": 0.9663,
+   "relevance_raw": 0.937165641264706,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 2,
+ "engines_used": [
+  "so360",
+  "sogou",
+  "baidu",
+  "yandex"
+ ],
+ "engine_blocked": [
+  "shenma",
+  "duckduckgo"
+ ],
+ "engine_preempted": [
+  "bing",
+  "seznam",
+  "brave",
+  "marginalia",
+  "yahoo",
+  "bing_global"
+ ],
+ "engine_detail": [
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 40s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "6 usable rows from 7 item nodes"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "11 usable rows from 11 item nodes"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 60s"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "8 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "4 of 9 (6 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2414,
+ "error": "",
+ "fetch_hint": "2 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines shenma, duckduckgo didn't contribute (2 blocked); results are from the rest. | no follow-up phrases this round: 1 word pair(s) recurred across 2+ independent sources but every one was dropped - either it opens with a function word (a sentence fragment, not a query) or it restates words your own query already carries",
+ "summary": "Searched 'data update frequency reporting' -> 2 results (2 high, 0 med, 0 low) from so360,sogou,baidu,yandex; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. Some engines didn't contribute (2 blocked). For more recall: retry after the cooldown clears (cooling right now: duckduckgo 60s; the pool is whole again in 60s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing, seznam, brave, marginalia, yahoo, bing_global were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.44,
+ "_tool": "web_search",
+ "_tag": "p05-S2-search 找最新口径#03",
+ "_ts": "2026-10-26T03:12:08.948039+00:00"
+}

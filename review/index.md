@@ -23,6 +23,9 @@
 | round-09 | review/round-09 | 190be29 | 10 | 74（画像 65+旁支 9+probe 3）| 1 fixed（R09-002 recall clamp 具名）+ **3 REJECT（R09-001 fetch_hint 账在场 / R09-003 双形状 test 立规 / R09-004 location 门在）**+ E2 六现顺延 | 完成（检索质量轮：P5 复验 V1/V2，pytest 7768 绿×2）|
 | round-10 | review/round-10 | 5ad954f | 10 | 57（画像 48+旁支 9）+ probe 2 | **0 CONFIRM（第二个零修复轮，非连续）**——3 线索全 REJECT（crawl 代际=壳页闸+指纹键合 / attempt_cap=字段合同 / recall 0 行=查错词 probe 实证）| 完成（预算与时间轮：P5 真重启 13 tools，pytest 7768 绿）|
 | round-11 | review/round-11 | 2ab7b5e | 10 | 63（画像 53+旁支 9+probe 1）| 1 fixed（R11-001 feed max_items 负数拒绝）+ **4 REJECT**（两码各司其职/confirm 在 next_action/since 教格式/sys_guide 内容教学）| 完成（冷面深水轮：P5 复验 V1/V2，pytest 7771 绿×2）|
+| round-12 | review/round-12 | 120a5d7 | 10 | 68（主跑 61+补条 7）| **0 CONFIRM（第三个零修复轮，非连续）**——5 候选全 REJECT（截断陷阱×2 / clamp 字段看错 / auth_wall 分家设计 / test 立规家产）| 完成（链条协奏轮：P5 真重启 pid 3164，pytest 7771 绿）|
+| round-13 | review/round-13 | 22e9f88 | 10 | 95（主跑 57 + P1 补条 17 + P3 探针 21）| 2 fixed（R13-001 显式 selector 收窄免 collapse 误判 / R13-002 缓存回放带 selector 0 匹配注记）+ 6 REJECT（3 转 E：confirm 措辞/dialog 文案/tab 寿命；1 环境 bytes 差）+ 4 E 记录 | 完成（重装链轮：P5 真重启 pid 17028，pytest 7775 绿，ruff 16）|
+| round-14 | review/round-14 | f5f9340 | 10 | 78（主跑 63 + 补条 15）| **0 CONFIRM（第四个零修复轮，非连续）**——6 候选全 REJECT（R14-001 自推翻：offset 窗口形状命中在途契约；5 条转 E/D 文档面）；工作树含并发 agent 在途改动，只读不写 | 完成（回访与新鲜度轮：P5 真重启 pid 16212→23964，V1-V5 PASS，pytest 7844 绿，ruff 16）|
 
 ## 跨轮资产
 
@@ -30,5 +33,3 @@
 - backlog.md — E 类 UX 缺口（round-02 起带三现线标注与 wontfix 后记观察）
 - decisions.md — 决策日志
 - manual-2026-10-25/ — 手动摸底轮全部产物（报告 + 29 发原始回执）
-| round-12 | review/round-12 | 120a5d7 | 10 | 68（主跑 61+补条 7）| **0 CONFIRM（第三个零修复轮，非连续）**——5 候选全 REJECT（截断陷阱×2 / clamp 字段看错 / auth_wall 分家设计 / test 立规家产）| 完成（链条协奏轮：P5 真重启 pid 3164，pytest 7771 绿）|
-| round-13 | review/round-13 | 22e9f88 | 10 | 95（主跑 57 + P1 补条 17 + P3 探针 21）| 2 fixed（R13-001 显式 selector 收窄免 collapse 误判 / R13-002 缓存回放带 selector 0 匹配注记）+ 6 REJECT（3 转 E：confirm 措辞/dialog 文案/tab 寿命；1 环境 bytes 差）+ 4 E 记录 | 完成（重装链轮：P5 真重启 pid 17028，pytest 7775 绿，ruff 16；用户指示本轮收官后停止循环，不启 round-14）|

@@ -281,3 +281,26 @@
 - feed_read since= 增量语义（含 undated 条目计数）
 - focus / 结构化 / OCR 档（本轮广谱基线尚未触过的档）
 - doc_parse 非 UTF-8（GBK CSV）与多 sheet
+
+## round-14 新增/复发（回访与新鲜度轮 · 0 CONFIRM）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| offset 续片窗口形状 | 首报 `473B of 7.0KB` 「不点名切片」→ 重读在途测试 `test_an_offset_window_summary_names_the_slice.py`：`<本窗> of <总量> markdown` 正是契约，尾窗 truncated=False 也说切片 | **REJECT（首报自推翻）**；教训：判形状前先读在途测试/契约，别凭脑内形状 | p02 S2 / p10 |
+| recall 同文变体 + 词形巧合 | `/article`、`?t=html`、`?cb=…` 三行并排；「对话框 删除」召回注意力综述（snippet 含「删除线」） | E2/E6 已在册复发（R02-007 只合并同 URL；query 变体属「search 侧仍开放」） | p01 / p07 |
+| doc_parse summary 不点名 pages | `pages_returned=2`、`pages_total=3`、TOC 2/3 页，summary 只写 `1.3KB markdown · parse` | 字段层准确，交付话术缺口（E） | p06 |
+| discover path_include 种子行 | `path_include="/work"` → 7 行 = 6 个 `/work/*` + 种子 `/collections?items=6`；测试只断言续页、文档未写根行例外 | D/E（根行保留按设计；文档补一句，行为不改） | p11 S2 |
+| discover 手册 `max_depth` 漂移 | `references/tools.md:328` / `troubleshooting.md:72` 仍教 `max_depth`，schema 只收 `max_pages`；summary 仍说 `depth <= 2` | E（文档漂移；文件正被并发 agent 编辑，本轮**不碰**，待其落地后同步） | p07 / p11 |
+| L1 工程词 | cached / fetched_at / truncated / replay 直接上脸 | E 既有（长期） | p03 / p05 / p09 |
+| sys_guide 原文截断 | driver 对非 JSON 回执只存 600 字 | harness 量具（第五族：截断假候选） | p04 |
+| **正向实锤（在途新特性全成立）** | 相对 since（3h/3d/2w → 绝对 ISO 回执）· cache_ttl=0 回源/正数回放同 fetched_at · check 两相 baseline→changed · 批量读逐行 cached · offset 窗口 | 无缺陷（R14-010 PASS） | p01/02/04/05/08/09/10/12 |
+
+## round-14 必测回归点（round-15 新画像真实回访）
+
+1. 相对 since 三档（3h/3d/2w）：回执 `since` 是绝对 ISO、窗口外条目计数如实、undated 放行报数。
+2. `cache_ttl=0` 真回源；正数回放 `cached=True` 且 `fetched_at` 同值；回放不伪造 attempt 句。
+3. `extraction_type=check` 两相：首问 `1 baseline recorded`；再问 `changed=True`；未变说 unchanged。
+4. offset 续片 summary 一律 `<本窗> of <总量> markdown`（尾窗也说是切片；`[No more content.]` 不算窗口）。
+5. discover：`max_pages`/`path_include` 谓词 + 种子行；手册 `max_depth` 漂移是否已被并发 agent 修掉。
+6. r13 家产三件：css 收窄不判 collapse / 缓存 selector 0 匹配注记 live+hit / feed max_items=-3 具名拒绝。
+7. 前十三轮家产合并回访。

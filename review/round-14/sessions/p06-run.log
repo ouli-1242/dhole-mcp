@@ -1,0 +1,28 @@
+[p06 唐栗·兽医] session da156acf57e64c2fb3051e5fe3e5f0b3 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-PDF 指定页 2-3 ----
+[p06-S1-PDF 指定页 2-3#02] doc_parse   0.2s ok=True err=-  chars=1304
+      summary: 200 OK · 1.3KB markdown · parse
+   ok=True chars=1304 summary=200 OK · 1.3KB markdown · parse
+   head="> Title: Wrapped heading fixtures (this file's own info dictionary - recorded by the app that wrote "
+      (pause 5s - throttle)
+
+---- p06 S2-feed 一周内公告 ----
+[p06-S2-feed 一周内公告#03] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 3 items, newest first · fetched live at 2026-10-26T0
+   since=2026-10-19T03:12:54.058185+00:00 older=1 items=3
+      (pause 5s - throttle)
+
+---- p06 S3-剂量页读两遍 ----
+[p06-S3-剂量页读两遍#04] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p06-S3-剂量页读两遍#05] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fet
+   first cached=None second cached=True same_ts=True
+      (pause 5s - throttle)
+
+---- p06 S4-state 复盘 ----
+[p06-S4-state 复盘#06] sys_state   0.0s ok=None err=-  chars=
+   message: Nothing is open: no cookie jar, no browser session. Nothing erased.
+P06 DONE

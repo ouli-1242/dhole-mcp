@@ -1,0 +1,24 @@
+{
+ "checked": 1,
+ "changed_urls": [],
+ "unchanged_urls": [
+  "http://127.0.0.1:8399/work/2?cb=p02-static"
+ ],
+ "baseline_urls": [],
+ "error_urls": [],
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/work/2?cb=p02-static",
+   "changed": false,
+   "status": 200,
+   "fetcher": "http",
+   "note": "origin answered 200 and the body matches the baseline byte for byte (validators were ignored or the page is truly unchanged)"
+  }
+ ],
+ "summary": "checked 1 URL(s): 0 changed, 1 unchanged, 0 baseline recorded, 0 error",
+ "note": "each row compares the live page with dhole's own html baseline; changed=null with a 2xx status means this call recorded that URL's first baseline, not that it failed",
+ "_wall_s": 0.06,
+ "_tool": "web_read",
+ "_tag": "p12-T2-check 再问一次（应 unchanged）#03",
+ "_ts": "2026-10-26T03:18:11.357012+00:00"
+}

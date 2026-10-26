@@ -42,3 +42,10 @@
   判决尺阴性由单测 `test_without_a_selector_a_real_loss_stays_collapsed` 承担；不为造阴性改靶站。
 - **循环在此收口**：用户指示「做完 r13 就停止，不要继续循环」。P7 与 round-14 不启动；
   round-14 的必测回归点仍写入 common-issues（若日后继续可直接用）。
+
+## 2026-10-26T11:07+08:00 round-14：并发 agent 与脏工作树处置（偏离宪章 P0.1）
+- 现场：工作树有另一位 agent 的未提交改动（src/tests/docs 多文件），用户明确要求不打扰、不提交、不回滚。
+- 处置：不执行 P0.1 的 WIP commit / 切回基线；直接 `git switch -c review/round-14`（工作树零改动），
+  本轮被测对象 = 当前工作树（editable，含对方在途改动）；P6 只暂存 review/round-14 与本轮修复 hunk，
+  不整文件 `git add` 吞掉他人改动。
+- 影响：P5 全量 pytest 若因对方在途改动出现红，先按旧债/in-flight 归因（不记本轮回归），如实写入 verification。

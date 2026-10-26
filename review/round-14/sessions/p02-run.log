@@ -1,0 +1,41 @@
+[p02 陆知微·专利审查员] session e7a587f814f14890b7461813198e4e20 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-长文截断续片（max 500） ----
+[p02-S1-长文截断续片（max 500）#02] web_read   0.1s ok=True err=- truncated chars=7157
+      summary: 200 OK · 478B of 7.0KB markdown · http · truncated · one HTTP attempt is bound by the learned ceilin
+   truncated=True next_offset=478 chars=7157
+      (pause 5s - throttle)
+
+---- p02 S2-offset 续片（summary 点名切片） ----
+[p02-S2-offset 续片（summary 点名切片）#03] web_read   0.0s ok=True err=- truncated chars=7157
+      summary: 200 OK · 473B of 7.0KB markdown · cache · cached copy, fetched 0.1 min ago · truncated · replayed fr
+   offset=478 chars=7157
+   summary: 200 OK · 473B of 7.0KB markdown · cache · cached copy, fetched 0.1 min ago · truncated · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above.
+      (pause 6s - throttle)
+
+---- p02 S3-连打三种读法（cache_ttl=0 → 默认 → 再 0） ----
+[p02-S3-连打三种读法（cache_ttl=0 → 默认 → 再 0）#04] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+      (pause 3s - throttle)
+[p02-S3-连打三种读法（cache_ttl=0 → 默认 → 再 0）#05] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fet
+      (pause 3s - throttle)
+[p02-S3-连打三种读法（cache_ttl=0 → 默认 → 再 0）#06] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   0→default→0: cached=None,True,None
+      (pause 6s - throttle)
+
+---- p02 S4-check 变化检查（两 URL 批量） ----
+[p02-S4-check 变化检查（两 URL 批量）#07] web_read   0.1s ok=None err=-  chars=
+      summary: checked 2 URL(s): 0 changed, 0 unchanged, 2 baseline recorded, 0 error
+   rows=2
+   - {'url': 'http://127.0.0.1:8399/article?cb=p02-2', 'status': 200, 'note': "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whether 
+   - {'url': 'http://127.0.0.1:8399/work/1?cb=p02-3', 'status': 200, 'note': "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whether i
+   summary: checked 2 URL(s): 0 changed, 0 unchanged, 2 baseline recorded, 0 error
+      (pause 5s - throttle)
+
+---- p02 S5-state 复盘 ----
+[p02-S5-state 复盘#08] sys_state   0.0s ok=None err=-  chars=
+   message: 1 session(s) open, holding 0 cookie(s); the cache and stored-task counts ride along. Nothing erased.
+P02 DONE

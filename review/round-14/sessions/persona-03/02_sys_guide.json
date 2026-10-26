@@ -1,0 +1,7 @@
+{
+ "_raw": "topic='fields' from references/fields.md — reading a response: what each field means and what to do when it is not the default\n(80153 chars, 10 sections)\n\n# Response Field Dictionary\n\nConsult this when a response doesn't make sense or a field shows a non-default value. **Responses are compressed: absence means default** — a missing field is \"nothing unusual\", not lost data. There is no switch that makes dhole send every field: the shape is the shape.\n\n**Where the JSON lives:** the whole response is ONE JSON object delivered in the text channel — there is no `structuredContent`. That double env",
+ "_wall_s": 0.01,
+ "_tool": "sys_guide",
+ "_tag": "p03-S1-guide 看回执字段#02",
+ "_ts": "2026-10-26T03:10:17.578348+00:00"
+}

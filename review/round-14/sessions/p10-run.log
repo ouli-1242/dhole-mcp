@@ -1,0 +1,39 @@
+[p10 罗青·编剧] session 427139cc42d542a78e2c4fd826e7066b server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p10-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p10 S1-search 背景资料 ----
+[p10-S1-search 背景资料#02] web_search   2.6s ok=None err=-  chars=
+      summary: Searched 'history of the printing press' -> 2 results (2 high, 0 med, 0 low) from shenma,so360,sogou
+   Searched 'history of the printing press' -> 2 results (2 high, 0 med, 0 low) from shenma,so360,sogou,yahoo; rerank=neural.
+      (pause 12s - throttle)
+
+---- p10 S2-长文截断（max 500） ----
+[p10-S2-长文截断（max 500）#03] web_read   0.1s ok=True err=- truncated chars=7157
+      summary: 200 OK · 478B of 7.0KB markdown · http · truncated · one HTTP attempt is bound by the learned ceilin
+   truncated=True next=478 head='专题长文\n\n专题长文\n====\n\n第 0 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第'
+      (pause 5s - throttle)
+
+---- p10 S3-offset 续读（总结是否点名切片） ----
+[p10-S3-offset 续读（总结是否点名切片）#04] web_read   0.0s ok=True err=- truncated chars=7157
+      summary: 200 OK · 473B of 7.0KB markdown · cache · cached copy, fetched 0.1 min ago · truncated · replayed fr
+   chars=473 summary=200 OK · 473B of 7.0KB markdown · cache · cached copy, fetched 0.1 min ago · truncated · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google re
+   overlap_head='。 第 11 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认'
+      (pause 5s - throttle)
+
+---- p10 S4-check 记基线 ----
+[p10-S4-check 记基线#05] web_read   0.1s ok=None err=-  chars=
+      summary: checked 1 URL(s): 0 changed, 0 unchanged, 1 baseline recorded, 0 error
+   checked 1 URL(s): 0 changed, 0 unchanged, 1 baseline recorded, 0 error
+      (pause 4s - throttle)
+
+---- p10 S5-check 隔天再看（应 unchanged） ----
+[p10-S5-check 隔天再看（应 unchanged）#06] web_read   0.0s ok=None err=-  chars=
+      summary: checked 1 URL(s): 0 changed, 1 unchanged, 0 baseline recorded, 0 error
+   checked 1 URL(s): 0 changed, 1 unchanged, 0 baseline recorded, 0 error
+      (pause 6s - throttle)
+
+---- p10 S6-点名取块（css_selector 回归） ----
+[p10-S6-点名取块（css_selector 回归）#07] web_read   0.1s ok=True err=-  chars=10
+      summary: 200 OK · 10B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   content_ok=True chars=10 err=
+P10 DONE

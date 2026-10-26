@@ -1,0 +1,25 @@
+{
+ "message": "Nothing is open: no cookie jar, no browser session. Nothing erased.",
+ "cache": {
+  "entries": 286,
+  "expired": 253,
+  "oldest_age_s": 162916,
+  "cap": 10000,
+  "hits": 9,
+  "misses": 15
+ },
+ "cred_defaults": [
+  {
+   "key": "allow_private",
+   "scope": "",
+   "stored_s_ago": 15,
+   "value": true
+  }
+ ],
+ "identity_count": 1,
+ "next_action": "No session is open. The content cache holds 286 entry(ies) - sys_state(clear=['cache']) erases them. CDP attach roster: github.com (approved before approvals carried a date), i.mooc.chaoxing.com (approved before approvals carried a date) - clear=['cdp:host=<name>'] revokes one, clear=['cdp_hosts'] all (confirm=true); an approval is re-asked after 30 days. the roster is the file `cdp_hosts.json` in dhole's home directory - run `dhole doctor` for its full path on this machine.",
+ "_wall_s": 0.03,
+ "_tool": "sys_state",
+ "_tag": "p06-S4-state 复盘#06",
+ "_ts": "2026-10-26T03:13:04.173037+00:00"
+}

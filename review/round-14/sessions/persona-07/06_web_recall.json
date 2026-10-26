@@ -1,0 +1,31 @@
+{
+ "query": "对话框 删除",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "https://www.doc88.com/p-08339570355410.html",
+   "title": "深度学习模型中的注意力机制研究综述",
+   "snippet": "…视图 标记 批注 搜本文档 搜全站 1 / 1 批注本地保存成功，开通会员云端永久保存 去开通 标记设置 高亮 下划线 删除线 波浪线 画笔设置 线条颜色 字体设置 微软雅黑 微软雅黑 宋体 黑体 楷体 Arial 文字大小 透明度 线条粗细 fmjwenku 上传于：2024-03-05 粉丝量：7 文档资料 下载此文档 直接下载 相关 目录 笔记 书签 更多 相关文档 正在努力加载中...",
+   "fetched_at": "2026-10-24T10:50:37Z",
+   "is_stale": true,
+   "age_days": 1.7,
+   "extraction_type": "markdown",
+   "relevance": 0.1054
+  }
+ ],
+ "terms_found": [
+  "对话",
+  "删除"
+ ],
+ "terms_absent": [
+  "话框"
+ ],
+ "scanned_rows": 198,
+ "candidates_scored": 8,
+ "dropped_low_relevance": 7,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 1.28,
+ "_tool": "web_recall",
+ "_tag": "p07-S5-recall 找展品页#06",
+ "_ts": "2026-10-26T03:14:07.402963+00:00"
+}

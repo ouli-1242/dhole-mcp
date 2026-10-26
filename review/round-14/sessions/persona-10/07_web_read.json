@@ -1,0 +1,33 @@
+{
+ "status": 200,
+ "content": [
+  "本地抓取工具配置指南"
+ ],
+ "url": "http://127.0.0.1:8399/article?cb=p10-css",
+ "fetcher_used": "http",
+ "duration_ms": 36,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1265,
+ "total_extracted_chars": 10,
+ "visible_text_chars": 400,
+ "substance_basis": "css_selector narrowed this answer to the requested fragment - the whole-page prose and collapse rulers do not apply",
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 10B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:16:53Z",
+ "metadata": {
+  "title": "本地抓取工具配置指南",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 10,
+ "_wall_s": 0.09,
+ "_tool": "web_read",
+ "_tag": "p10-S6-点名取块（css_selector 回归）#07",
+ "_ts": "2026-10-26T03:16:53.149831+00:00"
+}
