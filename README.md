@@ -14,22 +14,9 @@
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
 </p>
 
+<p>English: <a href="README.en.md">README.en.md</a></p>
+
 </div>
-
-## English
-
-**Dhole gives AI agents hands that actually reach the web.** One local [MCP](https://modelcontextprotocol.io) server: fetch · search · crawl · read PDFs · act on pages · watch for changes — 13 tools in one process, **zero API keys, zero models, zero telemetry** by default.
-
-- **Install**: `pip install dhole-mcp` (full tier: browser / PDF / OCR / parsers / reranker included; the Chromium download happens on first use, or run `python -m patchright install chromium` ahead of time). Then `dhole doctor` checks the whole setup end to end.
-- **Connect** (Claude Desktop / Cursor / Codex / Cherry Studio — field names vary, look for `command`):
-
-```json
-{"mcpServers": {"dhole": {"command": "dhole", "args": []}}}
-```
-
-- **What it does**: `web_read` fetches any URL through an anti-bot ladder (HTTP → stealth browser → archive fallback) and reads PDFs with OCR; `web_act` clicks, fills, uploads, answers dialogs, drives tabs — submissions pause for human confirmation; `web_search` runs 12 keyless engines in parallel with a local cross-encoder reranker, plus news/papers/Q&A/code/community verticals; `web_research` turns one question into a cited evidence pack; `web_crawl` / `web_discover` map and read whole sites; `doc_parse` turns local files into Markdown; `web_recall` searches pages this machine already read — and every call answers with the same honest JSON envelope (what was extracted, which tier ran, what to do next).
-- **Boundaries**: robots.txt is honoured by default; private networks and cloud metadata endpoints are refused; credentials never leave the process and never cross origins; writes are sent exactly once, behind an approval gate; content the page contains is treated as untrusted data.
-- The rest of this document is the full manual in Chinese (安装 · 配置 · 边界 · 命令 · 文档). The packaged handbook ships in both doors: `sys_guide(topic=...)` over MCP, or `dhole skill install` for hosts that load skills.
 
 ## 为什么要有它
 
