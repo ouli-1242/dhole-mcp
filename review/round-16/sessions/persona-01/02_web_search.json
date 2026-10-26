@@ -1,0 +1,176 @@
+{
+ "query": "缓存 失效 重新验证",
+ "results": [
+  {
+   "title": "Next-缓存和重新验证",
+   "url": "https://helloworld.net/tutorial/next/next-caching_revalidating",
+   "snippet": "重新验证是清除数据缓存并重新获取最新数据的过程。当您的数据发生更改并希望在保持静态渲染速度的同时显示最新信息时,这非常有用。 缓存的数据可以通过两种方式重新验证: 基于时间的重新验证:在一定时间间隔后自动重新验证数据。这对于不经常变化且数据新鲜度要求不高的数据非常有用。 按需重新验证:基于某个事件(例如表...",
+   "source": "baidu",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9976276523811762,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "...Research Skills 失效验证缓存条目并强制重新核对-CSDN博客",
+   "url": "https://blog.csdn.net/gitblog_07712/article/details/151463842",
+   "snippet": "真正让重新核对发生的是后续的验证 gate(#541 定义的无条件失效级联,见commands/ars-cache-invalidate.md与docs/design/2026-05-21-v3.10-182-promote-citation-gate-spec.md§2Delta2): 下一次 pipeline 运行到达 citation gate 时,该引用的缓存全部为 miss,",
+   "source": "baidu",
+   "position": 2,
+   "relevance_score": 0.9682,
+   "relevance_raw": 0.9635291802128629,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "blog",
+   "published": "2026-09-09",
+   "published_precision": "day",
+   "published_basis": "2026年9月9日"
+  },
+  {
+   "title": "缓存失效了,怎么办?-缓存失效",
+   "url": "https://www.51cto.com/article/742612.html",
+   "snippet": "针对缓存穿透的解决方案: 1.第一种方案是采用布隆过滤器进行数据拦截。这也是针对缓存击穿采用的常用方案。在写入数据时,使用布隆过滤器对数据的key进行标记,当带有数据key的请求过来后,先用布隆过滤器验证key是否存在,如果存在,再进入缓存或者数据库中进行查询。",
+   "source": "baidu",
+   "position": 3,
+   "relevance_score": 0.8708,
+   "relevance_raw": 0.8987083900752072,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2022-12-19",
+   "published_precision": "day",
+   "published_basis": "2022年12月19日"
+  }
+ ],
+ "total_results": 3,
+ "engines_used": [
+  "shenma",
+  "so360",
+  "baidu",
+  "sogou"
+ ],
+ "engine_blocked": [
+  "brave",
+  "duckduckgo"
+ ],
+ "engine_preempted": [
+  "bing_global",
+  "bing",
+  "marginalia",
+  "seznam",
+  "yahoo",
+  "yandex"
+ ],
+ "engine_detail": [
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "9 usable rows from 9 item nodes"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "4 usable rows from 7 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "8 usable rows from 10 item nodes"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "4 of 9 (6 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 3,
+  "rows_with_date": 2,
+  "rows_no_date": 1,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 0,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 3
+ },
+ "duration_ms": 2896,
+ "error": "",
+ "fetch_hint": "3 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines brave, duckduckgo didn't contribute (2 blocked); results are from the rest.",
+ "summary": "Searched '缓存 失效 重新验证' -> 3 results (3 high, 0 med, 0 low) from shenma,so360,baidu,sogou; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. Some engines didn't contribute (2 blocked). For more recall: retry after the cooldown clears (cooling right now: duckduckgo 59s; the pool is whole again in 59s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing_global, bing, marginalia, seznam, yahoo, yandex were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 3.23,
+ "_tool": "web_search",
+ "_tag": "p01-S1-中文搜索#02",
+ "_ts": "2026-10-26T03:47:24.512566+00:00"
+}

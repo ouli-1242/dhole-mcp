@@ -1,0 +1,31 @@
+{
+ "status": 200,
+ "content": [
+  "表情符号与组合字符测试\n这里有 emoji 😀🚀👩💻 与组合字符 é、全角ＡＢＣ、零宽字符，以及一段足够长的中文正文用于抽取。\nEnd of the 表情符号与组合字符测试 sample."
+ ],
+ "url": "http://127.0.0.1:8398/emoji.html?cb=😀🚀",
+ "cached": true,
+ "fetcher_used": "cache",
+ "duration_ms": 8,
+ "error": "",
+ "content_type": "text/html",
+ "total_size_bytes": 401,
+ "total_extracted_chars": 94,
+ "visible_text_chars": 109,
+ "summary": "200 OK · 94B markdown · cache · cached copy, fetched 0.4 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above.",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:47:55Z",
+ "metadata": {
+  "title": "表情符号与组合字符测试",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 62,
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p05-S1-emoji 页读两遍#02",
+ "_ts": "2026-10-26T03:48:20.340875+00:00"
+}

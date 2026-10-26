@@ -179,3 +179,22 @@
 - 并发纪律：修复只落 actions.py 的 property 分支 3 行；该文件含对方 336 行在途改动，
   P6 用单 hunk 暂存；未碰其 models/server/quality/docs；backlog.md 仍不暂存。
 - 下一步：round-16 P0（端口 9216；从本轮顶端切出；先读 common-issues 的 round-15 必测点）。
+
+### round-16 收官（2026-10-26）
+
+- 主题「编码与多语言」：10 画像 + 补条，**70 发 13/13 工具**；自建多语言页面站 8398
+  （ar/ja/ko/ru/emoji/gbk/latin1/mixed）+ 本地 GBK/UTF-16/emoji CSV。
+- **1 CONFIRM(B)，修复推迟**：R16-001 —— 只在 `<meta>` 声明编码的页面被当 UTF-8。
+  GBK 页 read 返回 `[Binary content detected …]` 占位句、crawl 是乱码；Latin-1 页重音
+  全变 U+FFFD；三者 content_ok 仍 true。**延迟原因**：fetcher.py/crawl.py/trafilatura_extractor.py
+  正由另一位 agent 编辑（11:38-11:50 注释翻译在途），按用户指示不动其文件；测试草稿与
+  修法已备好（fixes/test-R16-F1-draft.py + review.md），下一轮其落地后接线。
+- 多语言正向全过：UTF-8 六文字保真 / 非 ASCII URL 参数作缓存键 / 阿语表单值与登录 /
+  GBK·UTF-16·emoji 本地文件 / CJK·emoji recall / 五语搜索 high+neural / discover 分账。
+- E：ZWJ/ZWSP 被解析器丢弃（视觉无损）；E6 recall 噪声与繁简不互通；量具两起
+  （跨画像共享缓存、脚本码点断言双层转义——脚本已修）。
+- P5：真重启 **pid 23108→28668**；V1/V2/V4/V5 PASS，V3 作为已知缺陷复现记录；
+  pytest **7845 passed/23 skipped**；ruff 16。
+- P6：只提交 review/round-16；src/tests 零暂存（对方在途改动未被吞）。
+- 下一步：round-17 P0（端口 9217；从本轮顶端切出；先查对方 fetcher 编辑是否落地 →
+  R16-001 接线修复；再读 common-issues round-16 必测点）。

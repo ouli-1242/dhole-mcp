@@ -1,0 +1,17 @@
+{
+ "query": "café français",
+ "engine": "bm25",
+ "results": [],
+ "terms_found": [],
+ "terms_absent": [
+  "café",
+  "français"
+ ],
+ "scanned_rows": 248,
+ "candidates_scored": 0,
+ "note": "nothing on this disk matches - the cache only knows pages fetched through dhole on this machine",
+ "_wall_s": 0.03,
+ "_tool": "web_recall",
+ "_tag": "p06-S4-recall 重音词#05",
+ "_ts": "2026-10-26T03:48:45.773063+00:00"
+}

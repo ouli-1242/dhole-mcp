@@ -1,0 +1,29 @@
+[p02 莱拉·阿拉伯语译者] session 0c022fa5fcbc42dfbcf065714d60a718 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-RTL 正文保真 ----
+[p02-S1-RTL 正文保真#02] web_read   0.0s ok=True err=-  chars=150
+      summary: 200 OK · 150B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   ok=True chars=150 has_arabic=False
+   head='هذا نص عربي طويل لاختبار اتجاه الكتابة من اليمين إلى اليسار. يحتوي على أرقام 12345 وكلمات '
+      (pause 3s - throttle)
+
+---- p02 S2-同页复读（阿语缓存键） ----
+[p02-S2-同页复读（阿语缓存键）#03] web_read   0.0s ok=True err=-  chars=150
+      summary: 200 OK · 150B markdown · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fet
+   cached=True same_chars=150
+      (pause 4s - throttle)
+
+---- p02 S3-阿语用户名登录 + 会话读 ----
+[p02-S3-阿语用户名登录 + 会话读#04] web_request   0.0s ok=True err=-  chars=34
+      summary: 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   login status=200 err=
+[p02-S3-阿语用户名登录 + 会话读#05] web_read   0.0s ok=True err=-  chars=23
+      summary: 200 OK · 23B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   account ok=True chars=23 head='欢迎回来\n这是仅登录用户可见的内容。\n退出登录'
+      (pause 3s - throttle)
+
+---- p02 S4-state ----
+[p02-S4-state#06] sys_state   0.0s ok=None err=-  chars=
+   message: 2 session(s) open, holding 1 cookie(s); the cache and stored-task counts ride along. Nothing erased.
+P02 DONE

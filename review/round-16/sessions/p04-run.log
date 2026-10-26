@@ -1,0 +1,25 @@
+[p04 陈默·数据录入员] session 13339294ec024dfc9bc27e96df165cf7 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p04 S1-GBK CSV（缺省） ----
+[p04-S1-GBK CSV（缺省）#02] doc_parse   0.0s ok=True err=-  chars=69
+      summary: 200 OK · 69B markdown · parse
+   ok=True chars=69 北京=True summary=200 OK · 69B markdown · parse
+      (pause 3s - throttle)
+
+---- p04 S2-GBK CSV（encoding=gbk） ----
+[p04-S2-GBK CSV（encoding=gbk）#03] doc_parse   0.0s ok=True err=-  chars=69
+      summary: 200 OK · 69B markdown · parse
+   ok=True chars=69 上海=True
+      (pause 3s - throttle)
+
+---- p04 S3-UTF-16 CSV ----
+[p04-S3-UTF-16 CSV#04] doc_parse   0.0s ok=True err=-  chars=37
+      summary: 200 OK · 37B markdown · parse
+   ok=True chars=37 咖啡=True
+      (pause 3s - throttle)
+
+---- p04 S4-查手册确认字段读法 ----
+[p04-S4-查手册确认字段读法#05] sys_guide   0.0s ok=None err=-  chars=
+   len=600 head="topic='fields' from references/fields.md — reading a response: what each field means and what to do "
+P04 DONE

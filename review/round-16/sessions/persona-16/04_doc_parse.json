@@ -1,0 +1,25 @@
+{
+ "status": 200,
+ "content": [
+  "| 名称 | 心情 |\n| --- | --- |\n| 拿铁😀 | 开心 |\n| café | très bien |"
+ ],
+ "url": "file:///<server cwd>/review/round-16/sessions/files/emoji_table.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 10,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 52,
+ "total_extracted_chars": 59,
+ "summary": "200 OK · 59B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:46:39Z",
+ "metadata": {
+  "encoding": "utf-8"
+ },
+ "approx_tokens": 21,
+ "_wall_s": 0.02,
+ "_tool": "doc_parse",
+ "_tag": "p16-misc#04",
+ "_ts": "2026-10-26T03:46:39.822846+00:00"
+}

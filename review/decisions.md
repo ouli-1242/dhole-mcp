@@ -57,3 +57,13 @@
 - 测试改动落在 `tests/test_actions_2.py`（该文件在对方改动清单之外），整文件暂存安全。
 - `review/backlog.md` 仍含对方在途状态更新：round-15 的 E 记录写进 common-issues.md，
   待其落地后再合并回 backlog。
+
+## 2026-10-26T12:06+08:00 round-16：确认的 B 类缺陷在并发编辑下推迟修复
+- R16-001（meta-only 编码页被当 UTF-8）确认 B。修复必须落在 `fetcher._decode_html_bytes`
+  与 `trafilatura_extractor` 的二进制判定，再经 crawl 的解码路径生效；这三个文件在画像跑完
+  时正由另一位 agent 编辑（注释翻译，mtime 11:38-11:50）。
+- 处置：**不写其文件、不接线测试**（避免在对方工作树上留红测试）。4 枚测试草稿存
+  `review/round-16/fixes/test-R16-F1-draft.py`，修法逐条写进 review.md；
+  round-17 先查其编辑是否落地，落地即接线修复。
+- 归因：`git show HEAD` 无 sniff 代码，对方 diff 只有注释措辞——缺陷是既有的，不是其引入。
+- 这是循环首次「CONFIRM 但推迟修复」；记录在案，不把推迟读成 REJECT。

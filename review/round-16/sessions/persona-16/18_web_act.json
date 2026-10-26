@@ -1,0 +1,45 @@
+{
+ "status": 200,
+ "content": [
+  "混合语言页\n\n混合语言页\n=====\n\n中文段落，English sentence, العربية, 日本語, 😀.\n\n[العربية](/ar.html) [日本語](/ja.html)"
+ ],
+ "url": "http://127.0.0.1:8398/mixed.html?cb=v16act",
+ "fetcher_used": "stealthy",
+ "duration_ms": 3486,
+ "error": "",
+ "content_type": "text/html",
+ "total_size_bytes": 282,
+ "total_extracted_chars": 96,
+ "visible_text_chars": 63,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 96B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T06:03:21Z",
+ "metadata": {
+  "title": "混合语言页",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "read 'p'",
+    "ok": true,
+    "read_via": "inner_text",
+    "read": "中文段落，English sentence, العربية, 日本語, 😀."
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 39,
+ "_wall_s": 3.51,
+ "_tool": "web_act",
+ "_tag": "p16-misc#18",
+ "_ts": "2026-10-26T06:03:21.891769+00:00"
+}

@@ -1,0 +1,26 @@
+{
+ "round": 16,
+ "branch": "review/round-16",
+ "baseline_commit": "6f262fa",
+ "port": 9216,
+ "site_port": 8398,
+ "tools_expected": 13,
+ "phase": "P6_done",
+ "theme": "编码与多语言（非 ASCII URL / 正文保真 / GBK · Latin-1 · UTF-16 文件）",
+ "steps": {
+  "git_hygiene": "branch from 6f262fa; 工作树含另一位 agent 的未提交改动，只读不写，P6 只暂存 review/",
+  "skeleton": "done (scripts/sessions/reports/fixes/site)",
+  "env_verify": "done (editable v17.2; 13/13 tools; 多语言站 8398; CSV 三编码保真)",
+  "servers": "done (9216 pid 23108 -> restart pid 28668; 8399 pid 22360; 8398 pid 26904)",
+  "plan_and_personas": "done (10 sealed, theme 编码与多语言)",
+  "persona_sealed": true,
+  "p1_simulation": "done (70 calls: 55 persona + 12 probes + 3 act supplement; 13/13 tools)",
+  "p2_reports": "done (10 persona reports + report-round.md)",
+  "p3_review": "done (1 CONFIRM B + 2 E + 1 measurement + 1 A + 1 PASS)",
+  "p4_fix": "deferred (R16-001 fix path in fetcher/crawl/trafilatura_extractor being edited by another agent; draft test in fixes/)",
+  "p5_verify": "done (real restart pid 23108->28668; V1/V2/V4/V5 PASS; V3 known defect reproduces; pytest 7845 passed/23 skipped; ruff 16)",
+  "p6_assets": "done (verification.md; index/common-issues/_journal/decisions updated; backlog.md skipped due to concurrent edits)"
+ },
+ "updated": "2026-10-26T12:07:00+08:00",
+ "p1_calls_total": 70
+}

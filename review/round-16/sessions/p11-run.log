@@ -1,0 +1,14 @@
+[p11 补条·非ASCII交互] session 7b314e5aba9040518e433c32de83f18f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p11-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p11 S1-多语言页按 selector 读 ----
+[p11-S1-多语言页按 selector 读#02] web_act   4.4s ok=True err=- no_content chars=96
+      summary: 200 OK · 96B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   ok=True read='中文段落，English sentence, العربية, 日本語, 😀.'
+      (pause 3s - throttle)
+
+---- p11 S2-阿语填表并读回 ----
+[p11-S2-阿语填表并读回#03] web_act   4.6s ok=False err=- auth_wall chars=24
+      summary: 200 OK · 24B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   fill=True read='ليلى'
+P11 DONE

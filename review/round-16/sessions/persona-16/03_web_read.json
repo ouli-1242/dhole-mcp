@@ -1,0 +1,32 @@
+{
+ "status": 200,
+ "content": [
+  "هذا نص عربي طويل لاختبار اتجاه الكتابة من اليمين إلى اليسار. يحتوي على أرقام 12345 وكلمات إنجليزية mixed in.\n\nEnd of the اختبار الترميز العربي sample."
+ ],
+ "url": "http://127.0.0.1:8398/ar.html?cb=ت",
+ "fetcher_used": "http",
+ "duration_ms": 15,
+ "error": "",
+ "content_type": "text/html",
+ "total_size_bytes": 461,
+ "total_extracted_chars": 150,
+ "visible_text_chars": 193,
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 150B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T06:03:17Z",
+ "metadata": {
+  "title": "اختبار الترميز العربي",
+  "lang": "ar",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 38,
+ "_wall_s": 0.04,
+ "_tool": "web_read",
+ "_tag": "p16-misc#03",
+ "_ts": "2026-10-26T06:03:17.895165+00:00"
+}

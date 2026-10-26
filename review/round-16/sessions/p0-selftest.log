@@ -1,0 +1,5 @@
+server: {"name": "Dhole", "version": "17.2", "websiteUrl": "https://github.com/ouli-1242/dhole-mcp"}
+tools(13): web_read, web_act, web_request, web_crawl, web_discover, web_search, web_research, web_recall, cred_defaults, sys_state, doc_parse, feed_read, sys_guide
+ar.html ok=True chars=150 needle=False head='هذا نص عربي طويل لاختبار اتجاه الكتابة من اليمين إلى اليسار.'
+gbk.html ok=True chars=135 needle=False head='[Binary content detected. Cannot extract text from this URL.'
+SELFTEST DONE

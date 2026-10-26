@@ -328,3 +328,24 @@
 6. r14 三件：相对 since 绝对 ISO / offset 窗口 / check 两相；r13 三件（收窄/注记/负数）。
 7. recall URL 尾斜杠变体（E2）+ discover path_include 根行与 max_depth 文档（E 复发）。
 8. 前十四轮家产合并回访。
+
+## round-16 新增/复发（编码与多语言轮 · 1 CONFIRM，修复推迟）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| meta-only 编码页 | HTTP 头无 charset、页面只在 `<meta>` 声明编码时被当 UTF-8：GBK 页 read 给 `[Binary content detected …]` 占位句、crawl 给乱码；Latin-1 页重音变 U+FFFD；三者 content_ok 仍 true | **CONFIRM(B) R16-001，修复推迟**——解码路径（fetcher/crawl/trafilatura_extractor）正由另一位 agent 编辑；修法与 4 枚测试草稿见 review/round-16/review.md 与 fixes/test-R16-F1-draft.py。HEAD 即有此缺陷，非 in-flight 引入 | P06 / P10 |
+| emoji ZWJ/零宽空格 | 👩‍💻 的 U+200D 与 U+200B 被解析器丢弃；e+U+0301 归一为预组合 é | E（R16-002；视觉/语义几乎不变，backlog） | P03 |
+| recall 噪声 / 繁简 | 中文 recall 混入外部无关页；繁体「語言/頁面」不命中简体正文，仅「混合」命中 | E6 复发（terms_found 如实） | P01/P09 |
+| 跨画像共享缓存 | 同 URL 被前一个画像读过 → 本次「首读 cached=True」；脚本码点断言双层转义误报 False | 量具（R16-004；脚本已修，报告用回执码点复核） | P05 / P02-P08 |
+| recall 查本地 CSV | `web_recall "café"` 0 行——doc_parse 的本地文件不进网页抓取缓存 | A/用法（回执 note 已说明） | P06 |
+| **多语言正向实锤** | UTF-8 六种文字保真（阿/日/韩/俄/中/emoji）· 非 ASCII URL 参数可作缓存键 · 阿语表单值与登录 · GBK/UTF-16/emoji 本地文件 · CJK/emoji recall · 五语搜索 high+neural · discover 9 URL 分账（6+3） | 无缺陷（R16-006 PASS） | P01-P11 |
+
+## round-16 必测回归点（round-17 新画像真实回访）
+
+1. **R16-001**：meta-only 的 GBK / Latin-1 页面 read 与 crawl 都要按 meta 解码；content_ok 必须反映真实可读性。先查对方编辑是否落地，再接线 `fixes/test-R16-F1-draft.py` 并修 fetcher。
+2. R15-001：空框 property 读 ok=False + current value + 无异常。
+3. 多语言正向：UTF-8 六文字保真；非 ASCII URL 参数两读同 ts；阿语填表读回。
+4. 本地文件三编码：GBK（缺省/显式）、UTF-16、emoji+accent CSV。
+5. r14 三件（相对 since / offset 窗口 / check 两相）+ r13 三件（收窄/注记/feed -3）。
+6. emoji ZWJ/ZWSP 观察项（E）。
+7. 前十五轮家产合并回访。

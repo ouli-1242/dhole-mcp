@@ -1,0 +1,31 @@
+{
+ "status": 200,
+ "content": [
+  "هذا نص عربي طويل لاختبار اتجاه الكتابة من اليمين إلى اليسار. يحتوي على أرقام 12345 وكلمات إنجليزية mixed in.\n\nEnd of the اختبار الترميز العربي sample."
+ ],
+ "url": "http://127.0.0.1:8398/ar.html?cb=عربي",
+ "cached": true,
+ "fetcher_used": "cache",
+ "duration_ms": 6,
+ "error": "",
+ "content_type": "text/html",
+ "total_size_bytes": 461,
+ "total_extracted_chars": 150,
+ "visible_text_chars": 193,
+ "summary": "200 OK · 150B markdown · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above.",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:47:40Z",
+ "metadata": {
+  "title": "اختبار الترميز العربي",
+  "lang": "ar",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 38,
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p02-S2-同页复读（阿语缓存键）#03",
+ "_ts": "2026-10-26T03:47:43.922308+00:00"
+}

@@ -1,0 +1,29 @@
+{
+ "query": "emoji 😀 表情",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8398/emoji.html?cb=😀🚀",
+   "title": "表情符号与组合字符测试",
+   "snippet": "表情符号与组合字符测试 这里有 emoji 😀🚀👩💻 与组合字符 é、全角ＡＢＣ、零宽字符，以及一段足够长的中文正文用于抽取。",
+   "fetched_at": "2026-10-26T03:47:55Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.9471
+  }
+ ],
+ "terms_found": [
+  "emoji",
+  "表情"
+ ],
+ "terms_absent": [],
+ "scanned_rows": 246,
+ "candidates_scored": 3,
+ "dropped_low_relevance": 2,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 0.54,
+ "_tool": "web_recall",
+ "_tag": "p05-S2-emoji recall#04",
+ "_ts": "2026-10-26T03:48:23.892667+00:00"
+}

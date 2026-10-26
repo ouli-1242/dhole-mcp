@@ -1,0 +1,30 @@
+[p05 小满·社媒运营] session e31c134feadc4914b3562074bb75f96a server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p05-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p05 S1-emoji 页读两遍 ----
+[p05-S1-emoji 页读两遍#02] web_read   0.0s ok=True err=-  chars=94
+      summary: 200 OK · 94B markdown · cache · cached copy, fetched 0.4 min ago · replayed from the cache: the fetc
+[p05-S1-emoji 页读两遍#03] web_read   0.0s ok=True err=-  chars=94
+      summary: 200 OK · 94B markdown · cache · cached copy, fetched 0.4 min ago · replayed from the cache: the fetc
+   ok=True emoji=True cached=True->True same_ts=True
+      (pause 3s - throttle)
+
+---- p05 S2-emoji recall ----
+[p05-S2-emoji recall#04] web_recall   0.5s ok=None err=-  chars=
+   results=1 terms=['emoji', '表情']
+   - {'url': 'http://127.0.0.1:8398/emoji.html?cb=😀🚀', 'title': '表情符号与组合字符测试'}
+      (pause 4s - throttle)
+
+---- p05 S3-订阅流（近三天） ----
+[p05-S3-订阅流（近三天）#05] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 4 items, newest first · fetched live at 2026-10-26T0
+   since=2026-10-23T03:48:27.911941+00:00 older=3 items=4
+    - 靶站条目 1（0 天前）
+    - 靶站条目 2（1 天前）
+      (pause 3s - throttle)
+
+---- p05 S4-中文标签页 ----
+[p05-S4-中文标签页#06] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   ok=True chars=387 summary=200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+P05 DONE

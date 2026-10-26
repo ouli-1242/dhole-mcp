@@ -1,0 +1,60 @@
+{
+ "query": "中文 参数 页面",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "https://www.cnblogs.com/pywjh/p/9787605.html",
+   "title": "selenium动作链 - pywjh - 博客园",
+   "snippet": "…05.html) 一般来说我们与页面的交互可以使用`Webelement`的方法来进行点击等操作。 但是，有时候我们需要一些更复杂的动作，类似于拖动，双击，长按等等。 这时候就需要用到我们的`Action Chains`（动作链）了。",
+   "fetched_at": "2026-10-25T22:14:26Z",
+   "is_stale": true,
+   "age_days": 0.2,
+   "extraction_type": "markdown",
+   "relevance": 0.1234
+  },
+  {
+   "url": "https://pypi.org/project/dhole-mcp/",
+   "title": "dhole-mcp",
+   "snippet": "…ervers\": {\"dhole\": {\"command\": \"dhole\", \"args\": []}}} ``` 没有参数，没有密钥，没有环境变量。重启宿主，然后正常提要求。 ## 也可以把安装交给 agent 自己做 ``` 在这台机器上安装 Dhole MCP 服务器，逐步执行，失败就停下来报告。 1. 认清你所在的宿主，读出它的 MCP 配置位置与添加本地服务器的格式（读文档，不要猜）。 2. pip install dhole-mcp（已经是完整版）。 3.",
+   "fetched_at": "2026-10-26T03:33:55Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.0824
+  },
+  {
+   "url": "https://baike.baidu.com/item/%E6%99%AE%E9%80%9A%E7%A1%85%E9%85%B8%E7%9B%90%E6%B0%B4%E6%B3%A5",
+   "title": "普通硅酸盐水泥",
+   "snippet": "…腐蚀性差、不耐高温的局限性 <sup>[1]</sup><sup>[3]</sup>。干缩较小是其显著物理特性。",
+   "fetched_at": "2026-10-25T16:07:58Z",
+   "is_stale": true,
+   "age_days": 0.5,
+   "extraction_type": "markdown",
+   "relevance": 0.0742
+  },
+  {
+   "url": "https://www.kufanyun.com/ask/299042.html",
+   "title": "如何制作游戏策划配置表？，游戏策划配置表",
+   "snippet": "…堆积,它是以特定格式（常见如Excel、CSV、JSON、XML或数据库表）组织的数据集合，用于定义游戏中几乎所有的可变参数、行为规则与内容资源，其核心价值在于： 1. **解耦逻辑与数据：** 将游戏逻辑（程序代码）与具体内容数据分离，程序员编写处理数据的通用逻辑，策划则通过修改配置表数据来调整游戏内容，无需修改代码，极大提升迭代效率。 2.",
+   "fetched_at": "2026-10-25T18:27:57Z",
+   "is_stale": true,
+   "age_days": 0.4,
+   "extraction_type": "markdown",
+   "relevance": 0.0668
+  }
+ ],
+ "terms_found": [
+  "中文",
+  "参数",
+  "页面"
+ ],
+ "terms_absent": [],
+ "scanned_rows": 241,
+ "candidates_scored": 56,
+ "dropped_low_relevance": 20,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 4.35,
+ "_tool": "web_recall",
+ "_tag": "p01-S3-中文 recall#05",
+ "_ts": "2026-10-26T03:47:36.911215+00:00"
+}

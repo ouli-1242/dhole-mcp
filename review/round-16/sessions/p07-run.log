@@ -1,0 +1,28 @@
+[p07 金敏·韩语用户] session 918da317ff604173882dff4f0d92e2e4 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p07-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p07 S1-韩文页保真 ----
+[p07-S1-韩文页保真#02] web_read   0.0s ok=True err=-  chars=96
+      summary: 200 OK · 96B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   ok=True chars=96 has_hangul=False head='한국어 인코딩 테스트\n이것은 한국어 본문입니다. 한글 자모와 영문 mixed text, 숫자 2026 을 포함합니다.\nEnd '
+      (pause 4s - throttle)
+
+---- p07 S2-韩文搜索 ----
+[p07-S2-韩文搜索#03] web_search   2.5s ok=None err=-  chars=
+      summary: Searched '한국어 인코딩 테스트' -> 2 results (2 high, 0 med, 0 low) from sogou,so360,yandex,baidu; rerank=neu
+   Searched '한국어 인코딩 테스트' -> 2 results (2 high, 0 med, 0 low) from sogou,so360,yandex,baidu; rerank=neural.
+   - GitHub - YoungChanShin/Interview_Question_for_Beginner: :boy: ...
+   - FileCentipede/README.ko.md at main · Rei1mu/FileCentipede · ...
+      (pause 3s - throttle)
+
+---- p07 S3-韩文参数的靶站页 ----
+[p07-S3-韩文参数的靶站页#04] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   ok=True chars=387 err=
+      (pause 3s - throttle)
+
+---- p07 S4-复读缓存 ----
+[p07-S4-复读缓存#05] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fet
+   cached=True chars=387
+P07 DONE

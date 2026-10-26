@@ -1,0 +1,148 @@
+{
+ "query": "кодировка текст проверка",
+ "results": [
+  {
+   "title": "Определение кодировки строки в Python: Unicode vs ASCII",
+   "url": "https://sky.pro/wiki/python/opredelenie-kodirovki-stroki-v-python-unicode-vs-ascii/",
+   "snippet": "Python. Скопировать код. if is_bytestring(data): text = decode_bytestring(data) # Превращаем байты в текст, если это необходимо. Визуализация. Можно рассмотреть проверку строки...",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.7324106205352882,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Автоопределение кодировки текста / Хабр",
+   "url": "https://habr.com/ru/articles/483166/",
+   "snippet": "Кодировку UTF-8 и случаи с BOM проверяем отдельно. Входные данные передаём по очереди каждой кодировке. Каждая сама вычисляет два целочисленных критерия.",
+   "source": "yandex",
+   "position": 2,
+   "relevance_score": 0.1916,
+   "relevance_raw": 0.14041594273275754,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 2,
+ "engines_used": [
+  "so360",
+  "yandex",
+  "sogou"
+ ],
+ "engine_blocked": [
+  "duckduckgo",
+  "brave",
+  "shenma"
+ ],
+ "engine_preempted": [
+  "baidu",
+  "bing",
+  "yahoo",
+  "marginalia",
+  "bing_global",
+  "seznam"
+ ],
+ "engine_detail": [
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 32s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 31s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "6 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9 (6 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2438,
+ "error": "",
+ "fetch_hint": "1 high, 1 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. No query term corroborates any row this round (`24 characters` tokenized to nothing this scorer can check), so every tier here rests on the model's text agreement alone - a single post, not two. If this query was a follow-up whose subject lives in the conversation, name the subject: agreement against a few characters is not a topic verdict. web_read what fits your need (high first, but a lower tier can be the right call). | Engines duckduckgo, brave, shenma didn't contribute (3 blocked); results are from the rest. | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 12 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched 'кодировка текст проверка' -> 2 results (1 high, 1 med, 0 low) from so360,yandex,sogou; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. Some engines didn't contribute (3 blocked). For more recall: the pool is down to 3 of the 6 engines it asked; retry after the cooldown clears (cooling right now: shenma 59s, duckduckgo 32s, brave 31s; the pool is whole again in 59s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. baidu, bing, yahoo, marginalia, bing_global, seznam were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.44,
+ "_tool": "web_search",
+ "_tag": "p08-S2-西里尔搜索#03",
+ "_ts": "2026-10-26T03:49:06.398179+00:00"
+}

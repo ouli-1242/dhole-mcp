@@ -1,0 +1,76 @@
+{
+ "start_url": "http://127.0.0.1:8398/",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8398/",
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "Directory listing for /",
+   "fetched_at": "2026-10-26T03:49:43Z",
+   "summary": "200 OK · 590B html · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8398/ar.html",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "اختبار الترميز العربي",
+   "fetched_at": "2026-10-26T03:49:43Z",
+   "summary": "200 OK · 328B html · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8398/emoji.html",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "表情符号与组合字符测试",
+   "fetched_at": "2026-10-26T03:49:43Z",
+   "summary": "200 OK · 244B html · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8398/gbk.html",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "�������ҳ��",
+   "fetched_at": "2026-10-26T03:49:43Z",
+   "summary": "200 OK · 222B html · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8398/ja.html",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "日本語の文字化けテスト",
+   "fetched_at": "2026-10-26T03:49:47Z",
+   "summary": "200 OK · 262B html · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 25000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8398/ko.html",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "한국어 인코딩 테스트",
+   "fetched_at": "2026-10-26T03:49:47Z",
+   "summary": "200 OK · 243B html · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 25000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  }
+ ],
+ "pages_crawled": 6,
+ "pages_discovered": 9,
+ "discover_only": true,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 25000,
+ "sitemap_used": false,
+ "duration_ms": 56,
+ "summary": "mapped 9 URL(s) at http://127.0.0.1:8398 (depth <= 2) using 6 page fetch(es); no content extracted; stopped: max_pages reached · plan 22142b1222b5 holds the whole map: 9 row(s), 6 shipped here, 3 never sent",
+ "next_action": "map stopped early (max_pages); raise max_pages= (up to 40) on this same call. 3 URL(s) were discovered but never sent. A map costs one request per page, so a deeper map is paid in requests; for a ONE-request map pass max_pages=1 (this page's own links) or sitemap=true (whole site, if it publishes one). For bodies rather than a URL list, web_crawl(url=...) from the same start is the other door. The 3 map row(s) that were never sent are held here with the 6 that shipped, under plan 22142b1222b5 (9 row(s) = the whole map, 1h): web_discover(url='http://127.0.0.1:8398/', resume_token='22142b1222b5:6') lists rows 7-9 and spends no request. web_discover(url='http://127.0.0.1:8398/', resume_token='22142b1222b5:0') re-lists the map from row 1. web_crawl(url='http://127.0.0.1:8398/', resume_token='22142b1222b5:6') fetches the CONTENT of those held-back rows, and raising max_pages reaches them the slow way - one request per row.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "22142b1222b5",
+ "next_resume_token": "22142b1222b5:6",
+ "_wall_s": 0.06,
+ "_tool": "web_discover",
+ "_tag": "p10-S3-discover 多语言站#05",
+ "_ts": "2026-10-26T03:49:47.508255+00:00"
+}

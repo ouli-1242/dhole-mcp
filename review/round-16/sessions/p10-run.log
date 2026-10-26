@@ -1,0 +1,38 @@
+[p10 艾米·多语言QA] session a792cf98ddc44780a3ca0a4c18f3c664 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p10-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p10 S1-混合语言页两读 ----
+[p10-S1-混合语言页两读#02] web_read   0.0s ok=True err=-  chars=92
+      summary: 200 OK · 92B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+[p10-S1-混合语言页两读#03] web_read   0.0s ok=True err=-  chars=92
+      summary: 200 OK · 92B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fetc
+   ok=True cached=None->True same_ts=True
+      (pause 4s - throttle)
+
+---- p10 S2-crawl 多语言站 ----
+[p10-S2-crawl 多语言站#04] web_crawl   0.1s ok=None err=-  chars=
+      summary: crawled 4 page(s) at http://127.0.0.1:8398 (depth <= 2); 4 content_ok; fallback:4; stopped: max_page
+   crawled 4 page(s) at http://127.0.0.1:8398 (depth <= 2); 4 content_ok; fallback:4; stopped: max_pages reached
+   - {'url': 'http://127.0.0.1:8398/', 'content_ok': True, 'page_type': 'fallback'}
+   - {'url': 'http://127.0.0.1:8398/ar.html', 'content_ok': True, 'page_type': 'fallback'}
+   - {'url': 'http://127.0.0.1:8398/emoji.html', 'content_ok': True, 'page_type': 'fallback'}
+   - {'url': 'http://127.0.0.1:8398/gbk.html', 'content_ok': True, 'page_type': 'fallback'}
+      (pause 4s - throttle)
+
+---- p10 S3-discover 多语言站 ----
+[p10-S3-discover 多语言站#05] web_discover   0.1s ok=None err=-  chars=
+      summary: mapped 9 URL(s) at http://127.0.0.1:8398 (depth <= 2) using 6 page fetch(es); no content extracted; 
+   mapped 9 URL(s) at http://127.0.0.1:8398 (depth <= 2) using 6 page fetch(es); no content extracted; stopped: max_pages reached · plan 22142b1222b5 holds the whole map: 9 row(s), 6 shipped here, 3 never sent
+   rows=6
+      (pause 4s - throttle)
+
+---- p10 S4-emoji 文件解析 ----
+[p10-S4-emoji 文件解析#06] doc_parse   0.0s ok=True err=-  chars=59
+      summary: 200 OK · 59B markdown · parse
+   ok=True emoji=True accent=True chars=59
+      (pause 3s - throttle)
+
+---- p10 S5-state ----
+[p10-S5-state#07] sys_state   0.0s ok=None err=-  chars=
+   message: 2 session(s) open, holding 1 cookie(s); the cache and stored-task counts ride along. Nothing erased.
+P10 DONE
