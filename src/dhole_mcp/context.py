@@ -18,9 +18,19 @@ import contextlib
 import contextvars
 import re
 import time
+import warnings
 from typing import Any, Optional
 
 from dhole_mcp.models import ResponseModel
+
+# SEP-2577：logging 能力自 2026-07-28 起弃用。SDK 用它来标注 send_log_message，
+# 这里只为了在 report_stage 里**精确**压掉这一类告警（不是整类 UserWarning）。
+# 导入失败不致命：退回 UserWarning，最多是压得宽一点，不会因为 SDK 改包路径而
+# 让一次抓取失败。
+try:
+    from mcp.shared.exceptions import MCPDeprecationWarning
+except Exception:  # noqa: BLE001 - 只为一句告警的过滤，不押上抓取
+    MCPDeprecationWarning = UserWarning
 
 
 # ─── 响应转换辅助 ──────────────────────────────────────────────────
@@ -420,7 +430,15 @@ async def report_stage(stage: str, spent_ms: Optional[float] = None,
     except Exception:
         pass
     try:
-        await session.send_log_message("info", message, logger="dhole.stage")
+        # SEP-2577 把 logging 能力标成弃用，而 SDK 的 @deprecated 装饰器**无条件**
+        # 生效（与协商到的协议版本无关）：每发一句阶段话就往宿主 stderr 上刷一行
+        # MCPDeprecationWarning。dhole 仍然需要这条通道 —— 只实现 logging、不实现
+        # progress 的宿主靠它显示"这一等要几分钟"（见上面的理由），所以这里压掉
+        # 那条逐调用告警，而不是换通道：行为逐字节不变，变的是不再产出没人能处理
+        # 的弃用噪音。压的范围只有这一个 await，别的告警照旧。
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MCPDeprecationWarning)
+            await session.send_log_message("info", message, logger="dhole.stage")
         sent = True
     except Exception:
         pass

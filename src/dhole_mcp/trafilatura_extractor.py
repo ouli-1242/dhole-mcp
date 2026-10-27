@@ -524,6 +524,15 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
                 html = '\n'.join(
                     tostring(m, encoding='unicode') for m in matches
                 )
+            else:
+                # 与 `_narrow_html_to_selector` 的 R06-001 同一条规矩：编译通过、
+                # 但这份文档里 0 匹配时回落整页是设计（缩取从不掏空答案），不说
+                # 出来就不是。实测 2026-10-27：`extraction_type='html'` +
+                # `css_selector='h1'` 抓 example.com（该页已无 h1），577 字节整页
+                # 回来、content_ok=true、summary 里没有一个字提选择器没匹配 —— 而
+                # 同一次调用换成默认 markdown 就会说。缺口只在 html/text 这条
+                # 兜底路径上，因为它自己 inline 收窄、没走 _narrow_html_to_selector。
+                _note_selector_matched_nothing(css_selector)
         except Exception as e:
             logger.debug(f"CSS selector '{css_selector}' failed: {e}")
             _note_selector_not_applied(css_selector, e)

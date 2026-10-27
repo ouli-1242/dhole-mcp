@@ -383,6 +383,16 @@ _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
      "the selector matched nothing on the loaded page - check it against the real "
      "DOM (extraction_type='html', or screenshot the full page first); use "
      "wait_selector only if the element appears later"),
+    # 与上一条同类：选择器形状问题，不是渲染问题。Playwright 的 strict 模式在
+    # 一个选择器命中多个元素时拒绝裁切，标题只说 "resolved to 20 elements"，而
+    # 兜底 hint 让调用方 "call again" —— 重试同一张页面对同一个多命中选择器给出
+    # 同一个答案，那句话是空转。实测 2026-10-27：`div.image_container` 在
+    # books.toscrape 命中 20 个，两次调用（第二次换 `:first-child`，仍命中 20 个，
+    # 因为每个 article 各是自己 <li> 的头生子）都是同一句 "call again"。
+    (("strict mode violation", "resolved to multiple elements"),
+     "the selector matched more than one element and an element action needs exactly "
+     "one - narrow it (:nth-child(1), :first-of-type, or a unique parent), or address "
+     "the element by snapshot index ({snapshot: true}, then {\"screenshot\": {\"index\": N}})"),
     # 排在超时那一行之前，理由与那一行自己的理由同类：操作系统拒绝创建进程时，
     # 驱动说的是 "Timed out while launching browser"，而"raise timeout="是对一台
     # 浏览器根本起不来的机器上的慢页面给的建议。
@@ -552,6 +562,11 @@ def _write_screenshot(data: bytes, target: Path) -> str:
     return str(target.resolve())
 
 
+# strict 模式把命中数写在标题里（`resolved to 20 elements`）。取出这个数字是为了
+# 让 dhole 自己的一句话取代驱动前缀，见 `_screenshot_error_message`。
+_STRICT_MODE_COUNT = re.compile(r"resolved to (\d+) elements", re.IGNORECASE)
+
+
 def _screenshot_error_message(exc: BaseException) -> str:
     """把浏览器捕获的异常收成给 agent 的一行可行动的话。
 
@@ -560,11 +575,24 @@ def _screenshot_error_message(exc: BaseException) -> str:
     不是调用方的问题 —— 它不点名任何 agent 能改的参数，发出去既费上下文，又埋掉
     真正重要的那一行。保留异常类型和标题、丢掉日志、追加通常能修好的那一步。
     原始异常不会丢：调用方会把它记进日志给运维看。
+
+    strict 模式单独写一句：驱动的标题是 ``Error: Locator.screenshot: Error:
+    strict mode violation: locator("…") resolved to 20 elements``，前缀就吃掉
+    118 个字符，而动作回执只留 160 个字符给整行（`_action_failure` 取首行再截断）
+    —— 按通用形状接上去的建议会被截在"该修什么"之前。实测 2026-10-27：回执里
+    只剩 ``… resolved to 20 elements: - call again``，而重试同一张页面对同一个
+    多命中选择器给出的是同一个答案。所以这里用 dhole 自己的一句话顶掉驱动的
+    前缀，把两条门（收窄 / 按索引寻址）压进同一行。
     """
     text = str(exc).strip()
     headline = text.splitlines()[0].strip() if text else ""
     if not headline:
         headline = "(no message)"
+    count = _STRICT_MODE_COUNT.search(headline)
+    if count and "strict mode" in headline.lower():
+        return (f"{type(exc).__name__}: selector matched {count.group(1)} elements "
+                "(strict mode) - one element per capture: narrow it (:nth-child(1)) "
+                "or use a snapshot index")
     flat = " ".join(headline.split())
     if len(flat) > 160:
         flat = flat[:157].rstrip() + "..."
