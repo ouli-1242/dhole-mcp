@@ -7,6 +7,8 @@ consensus, and mapping logic being tested is the REAL code that runs on
 real search results.
 """
 
+
+
 import asyncio
 import json
 import pytest
@@ -17,6 +19,8 @@ from dhole_mcp.search_engines import (
     _passes_site_filter, _normalize_domain, RawResult, EngineReport, multi_search,
     _INDEX_FAMILY,
 )
+
+pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture

@@ -11,7 +11,9 @@ v16.0 之前 dhole 从不看 robots.txt（README 里明说了）。现在默认�
 * 接线：``web_read`` 被拒时**一个请求都不发**，``web_crawl`` 在 seed 就报错。
 """
 
+
 from __future__ import annotations
+
 
 import asyncio
 import types
@@ -30,6 +32,8 @@ from dhole_mcp.robots import (
     reset_robots_cache,
     robots_url_for,
 )
+
+pytestmark = pytest.mark.smoke
 
 PAGE = "https://example.com/deny"
 OTHER = "https://example.com/public"

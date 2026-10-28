@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import base64
 import pytest
@@ -11,7 +13,8 @@ from dhole_mcp import identity
 from dhole_mcp.browser import _create_route_handler
 from dhole_mcp.fetcher import HTTPSession, Response as DholeResponse
 from dhole_mcp.security import SecurityError
-from dhole_mcp.server import MasterFetchServer, ResponseModel, _auth_request_headers, _cache_context
+from dhole_mcp.server import (MasterFetchServer, ResponseModel, _auth_request_headers,
+                              _cache_context, DEFAULT_PROFILE_NAME)
 import asyncio
 import json
 from types import SimpleNamespace
@@ -19,6 +22,8 @@ from dhole_mcp import env_registry
 from dhole_mcp import browser as B
 from dhole_mcp.browser import BrowserBusyError
 from dhole_mcp.server import BulkResponseModel
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================
@@ -497,14 +502,14 @@ class TestA401SaysWhichOneItIs:
 # ─── 1 · 配置面退回原样 ──────────────────────────────────────────────────────
 
 def test_no_browser_knobs_survived_the_reversal():
-    """两颗旋钮整体退掉：注册表里没有名字，设了也不读（不是"文档没写"，是不存在）。"""
+    """两颗旋钮整体退掉：注册表里没有名字，设了也不读（不是"文档没写"，是不存在）。
+
+    这里只问"那两颗名字还在不在"，不问总数 —— 总数是账本，每加一颗旋钮都要来改
+    一次，而它从没拦住过任何事故。
+    """
     names = {e.name for e in env_registry.ALL}
     assert "DHOLE_BROWSER_HEADED" not in names
     assert "DHOLE_BROWSER_CHANNEL" not in names
-    assert len(env_registry.ALL) == 19, (
-        f"注册表应当是 19 颗（那两颗浏览器旋钮整体退掉之后，行级垃圾过滤与模型档位"
-        f"各补了一颗；keyed 引擎扩员补了四颗 API key），"
-        f"现在 {len(env_registry.ALL)} 颗：{sorted(names)}")
     assert not hasattr(B, "_browser_headed") and not hasattr(B, "_forced_browser_channel"), (
         "读旋钮的那两个函数还活着 —— 名字退了、代码没退，等于留了两扇门")
 
@@ -680,12 +685,17 @@ def test_headed_is_not_a_cache_or_stealth_rung(monkeypatch):
 
 # ─── 4 · 复用判据：不对称，且不接管不关窗 ────────────────────────────────────
 
-def _warm(monkeypatch, *, headless, profile=None):
+def _warm(monkeypatch, *, headless, profile=DEFAULT_PROFILE_NAME):
     """一台已经热着的 auto 会话，形态由它自己说。
 
     那颗假浏览器的画布噪声 / WebRTC 位必须**照当下档位表**摆：能不能复用问的是这两颗
     加上 profile 加上可见与否，三位里任何一位对不上都会走到"另起一台"，而这批的用例
     在离线跑 —— conftest 的 `_nobody_launches_a_browser` 会把它拦成红。
+
+    profile 默认取 server 的默认持久档：一台**真的**起过的浏览器一定是按那个名字建的
+    （`_ensure_auto_session` 从不让它落空），假的那台得跟着走，否则它演的是一台
+    "从没存在过的热浏览器"—— 复用判据把它当别的上下文上的旧车，测试就变成了在测
+    冷启动。
     """
     from dhole_mcp import rungs
 

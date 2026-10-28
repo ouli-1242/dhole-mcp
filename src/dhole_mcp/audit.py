@@ -4,6 +4,9 @@
 `_log_tool_call` 记每次调用，`_audit_event` 记 CDP attach 这类"成不成都该看见"的事件，
 `_result_error` 把工具自己报的失败从响应里挑出来喂给前两者。它们必须待在一起，
 因为共用同一份纪律：默认关、只落本机、不记参数值、best-effort 永不抛。
+
+`_log_query` 是**另一份**日志（`DHOLE_QUERY_LOG`）：调用日志永远不记参数值，而这
+一条刻意只记查询词——它是真实查询评测的原料，且同样默认关闭、只落本机、绝不联网。
 """
 
 from __future__ import annotations
@@ -15,6 +18,28 @@ from typing import Any
 
 from dhole_mcp import env_registry, paths
 from dhole_mcp.security import redact_api_key
+
+#: 调用日志的滚动上限：超过就把当前文件整体滚到 ``.1``（只留一代）。
+#: 这份日志是诊断用的，不是账本 —— 无界追加会让一个只读工具悄悄吃掉磁盘，
+#: 而它默认是关的，用户开了之后不会有任何东西提醒他文件在长。
+#: 只对 dhole 自己拥有的文件（``DHOLE_USAGE_LOG=1``）生效：用户点名的路径
+#: 归用户管，不动他的布置。
+USAGE_LOG_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _rotate_owned_log(target: str) -> None:
+    """超过上限就把 ``target`` 滚到 ``target.1``，best-effort 绝不抛。
+
+    只留一代：够回答"最近发生了什么"，又不至于让磁盘长胖。``os.replace``
+    在 Windows 上若目标被别的进程打开会失败，那种情况保持原样继续追加 ——
+    丢日志比抛异常好，这条纪律与两个写入口一致。
+    """
+    try:
+        if os.path.getsize(target) < USAGE_LOG_MAX_BYTES:
+            return
+        os.replace(target, target + ".1")
+    except OSError:
+        pass
 
 
 def _audit_event(event: str, **fields: Any) -> None:
@@ -39,6 +64,8 @@ def _audit_event(event: str, **fields: Any) -> None:
             "event": event,
         }
         entry.update(fields)
+        if owned:
+            _rotate_owned_log(target)
         with open(target, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         if owned:
@@ -108,6 +135,55 @@ def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> 
         }
         if error:
             entry["error"] = redact_api_key(str(error)[:200])
+        if owned:
+            _rotate_owned_log(target)
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        if owned:
+            paths.harden_dir(parent)
+            paths.harden_file(target)
+    except Exception:
+        pass
+
+
+def _log_query(query: str, *, mode: str = "", max_results: int = 0,
+               results: int = 0, engines: list[str] | None = None,
+               rerank_model: str = "") -> None:
+    """把一次真实搜索的查询词写进选开的本地语料库（DHOLE_QUERY_LOG）。
+
+    这是调用日志之外的**第二份**本地日志，因为两份要回答的问题相反：
+    ``DHOLE_USAGE_LOG`` 只记"谁被调了、成没成"，参数值一概不写；这一条刻意
+    只记查询词——真实查询是评测重排器的唯一可信原料，67 题冻结语料的分辨率
+    不够（计划 §2.3：只能分辨 8.6 pp 以上的差异，而模型间差 0.6 pp）。
+
+    纪律：默认关闭、只落本机、明文、不联网；只记查询词与最少元数据
+    （模式 / 结果数 / 引擎名 / 重排模型），不记结果、URL、摘要。``=1`` 写
+    ``~/.dhole/queries.jsonl``（目录 0700、文件 0600、20 MB 滚动），其它非空值
+    按用户给的路径原样写，不动他的布置。Best-effort，绝不抛出。
+    """
+    raw = (env_registry.value_of("DHOLE_QUERY_LOG") or "").strip()
+    if not raw or raw.lower() in env_registry.OFF_TOKENS:
+        return
+    text = (query or "").strip()
+    if not text:
+        return
+    owned = raw.lower() in env_registry.ON_TOKENS
+    target = str(paths.file("queries.jsonl")) if owned else raw
+    try:
+        parent = os.path.dirname(os.path.abspath(target))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        entry: dict = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "query": redact_api_key(text),
+            "mode": mode,
+            "max_results": int(max_results),
+            "results": int(results),
+            "engines": list(engines or []),
+            "rerank_model": rerank_model,
+        }
+        if owned:
+            _rotate_owned_log(target)
         with open(target, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         if owned:

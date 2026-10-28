@@ -56,10 +56,46 @@ def _startup_failure(exc: BaseException) -> str:
 
 
 def main() -> int:
-    """跑服务器；连 import 都做不到时，说清缺的是哪一件。"""
+    """跑服务器；连 import 都做不到时，说清缺的是哪一件。
+
+    帮助、命令目录与补全在 import ops **之前**就答完：那三件事只读
+    ``cli_spec``，不该为了一张表付服务器导入的 0.4–0.6s。其余任何 argv
+    （包括未知子命令、`-u`、一个坏掉的安装）都交给 ops —— 自愈文案必须还
+    走原来那条路，否则坏安装会被这里误报成"用法错误"。
+    """
     try:
+        from dhole_mcp import cli_spec
+        from dhole_mcp import cli_ui as ui
+
+        ui.utf8_stdio()
+        argv, color_err = ui.extract_color_flags(list(sys.argv[1:]))
+        if color_err:
+            print(ui.err(color_err), file=sys.stderr)
+            return 2
+        argv = cli_spec.reorder_globals(argv)
+        if argv:
+            first = argv[0].lower()
+            if first in ("-h", "--help"):
+                print(cli_spec.top_help())
+                return 0
+            if first == "help":
+                return cli_spec.print_help(argv[1:])
+            if first == "commands":
+                return cli_spec.print_commands(argv[1:])
+            if first in ("completion", "completions"):
+                return cli_spec.print_completion(argv[1:])
+            if (first in cli_spec.ALL_COMMANDS
+                    and any(a in ("-h", "--help") for a in argv[1:])):
+                print(cli_spec.command_help(first))
+                return 0
+            if any(a in ("-h", "--help") for a in argv):
+                cmd = next((a.lower() for a in argv
+                            if a.lower() in cli_spec.ALL_COMMANDS), None)
+                print(cli_spec.command_help(cmd) if cmd else cli_spec.top_help())
+                return 0
+
         from dhole_mcp.ops import main as _server_main
-        return _server_main() or 0
+        return _server_main(argv) or 0
     except (ImportError, ModuleNotFoundError) as exc:
         # 缺的名字才是可行动的："No module named 'bs4'" 指向一条安装命令，
         # 而 "cannot import name X from Y" 指向一次装多少依赖都修不好的代码

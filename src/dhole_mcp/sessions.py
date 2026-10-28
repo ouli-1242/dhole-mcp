@@ -19,20 +19,25 @@
   "我的登录还活着吗？"的 agent，由名字列表回答。
 * **在固定 :data:`COOKIE_TTL_S` 后过期**（24 小时，17.0 写死）。每次
   ``Set-Cookie`` 写入一次，发送时不刷新，所以被遗忘的会话不会永久累积凭据。
-  ``sys_state``（工具）可以丢掉整个罐、一个具名 id 或每一个。
+  ``sys_state``（工具）可以丢掉整个罐、一个具名 id 或每一个 —— 包括磁盘上那一份：
+  内存模式的进程列得出、也抹得掉另一个进程留下的持久会话（删行不需要解密），
+  只是取不到那些 cookie（见 :func:`sessions_everywhere`）。
 
 存储**默认在内存里**（SQLite ``:memory:`` —— 最安全的文件是不存在的那个文件）：
-罐与进程同寿，重启从零开始。``DHOLE_PERSIST_CREDENTIALS=1`` 把罐移到
+本进程的罐与进程同寿，重启从零开始。``DHOLE_PERSIST_CREDENTIALS=1`` 把罐移到
 ``~/.dhole/sessions.db``（目录/文件 0600，见 paths.py），每个 cookie **值**在
 落盘前都用 Windows DPAPI 加密（:mod:`dhole_mcp.secretbox`）—— 密钥绑定 Windows
 用户账户，那正是被复制或被同步的文件会失去的边界。pre-17.1 的明文文件会被读进
-活存储一次，然后删除（内存模式）或原地重新加密（持久模式）。
+活存储一次，然后删除（内存模式）或原地重新加密（持久模式）；带 ``dpapi:`` 值的
+文件**不是** legacy —— 它属于另一个持久模式的进程，内存模式原样留下，不吸收也不
+删除。
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import pathlib
 import sqlite3
 import threading
 import time
@@ -123,7 +128,14 @@ def _connect() -> sqlite3.Connection:
 def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
     """pre-17.1 的罐明文躺在 ``sessions.db`` 里。内存模式把它读进活罐一次然后删除
     文件：把明文凭据留在磁盘上会毁掉"不持久化"的全部意义。只收活（未过期）行 ——
-    罐的 TTL 纪律同样适用于一个被复活的罐。"""
+    罐的 TTL 纪律同样适用于一个被复活的罐。
+
+    加密值不是 legacy：那是**另一个进程**开着 DHOLE_PERSIST_CREDENTIALS=1 时写的
+    罐，归它所有。把 ``dpapi:…`` 当明文吸收进内存会做两件坏事——把密文当成 cookie
+    值发出去，还把那个进程的持久罐删掉。所以只要看见一颗加密值，整个文件原样留下；
+    内存模式照样能在普查里列出它、在 `sys_state(clear=…)` 里抹掉它（见
+    :func:`sessions_on_disk`），只是不能取用。
+    """
     try:
         db = _db_path()
         if not os.path.exists(db):
@@ -137,6 +149,12 @@ def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
             legacy.close()
     except Exception as e:
         logger.debug("legacy sessions.db unreadable, left in place: %s", e)
+        return
+    if any(secretbox.is_protected(value) for _, _, _, value, _ in rows):
+        logger.info(
+            "sessions.db holds encrypted cookie values - it belongs to a "
+            "persist-mode store, so this process leaves it in place (it can "
+            "still list and erase those sessions through sys_state)")
         return
     now = time.time()
     kept = 0
@@ -289,6 +307,19 @@ def names_for(session_id: str, url: str) -> list:
     return [row[0] for row in rows]
 
 
+def _census(rows: list, now: float) -> dict:
+    """活行 -> 只报名字的普查。两个存储共用这一份算法，别让它们漂开。"""
+    out: dict = {}
+    for sid, host, name, expires_at in rows:
+        entry = out.setdefault(sid, {"hosts": {}, "cookies": 0, "expires_in_s": 0})
+        entry["hosts"].setdefault(host, []).append(name)
+        entry["cookies"] += 1
+        left = int(expires_at - now)
+        if not entry["expires_in_s"] or left < entry["expires_in_s"]:
+            entry["expires_in_s"] = max(0, left)
+    return out
+
+
 def sessions() -> dict:
     """只报名字的普查：``{session_id: {"hosts": {host: [names]},
     "cookies": n, "expires_in_s": s}}``。
@@ -300,6 +331,9 @@ def sessions() -> dict:
 
     值永远不在这里。cookie 是凭据，而工具响应的每个字段都会落进 agent 的
     transcript。
+
+    这里只是**本进程**的罐。磁盘上那份属于另一个进程时，用
+    :func:`sessions_everywhere`。
     """
     now = time.time()
     with _lock:
@@ -313,19 +347,138 @@ def sessions() -> dict:
         except Exception as e:
             logger.debug("cookie jar census failed: %s", e)
             return {}
-    out: dict = {}
-    for sid, host, name, expires_at in rows:
-        entry = out.setdefault(sid, {"hosts": {}, "cookies": 0, "expires_in_s": 0})
-        entry["hosts"].setdefault(host, []).append(name)
-        entry["cookies"] += 1
-        left = int(expires_at - now)
-        if not entry["expires_in_s"] or left < entry["expires_in_s"]:
-            entry["expires_in_s"] = max(0, left)
+    return _census(rows, now)
+
+
+def uses_disk() -> bool:
+    """这个进程的罐是否**就是**磁盘上那一份。
+
+    `_connect` 还没被调用时 `_file_backed` 仍是 False，所以答案要跟它将来做的
+    决定一致：开关打开且有加密器，才落盘。`sys_state` 用这一格决定要不要另外去
+    读磁盘 —— 同一份读两次会把一颗 cookie 数成两颗。
+    """
+    if _conn is not None:
+        return _file_backed
+    return bool(_PERSIST and secretbox.available())
+
+
+def _disk_rows(db: str, now: float) -> list:
+    """只读打开磁盘上的罐并取活行。
+
+    ``mode=ro`` 是刻意的：普查只该读 —— 这一份可能属于另一个进程，顺手创建文件、
+    写 journal 或把它锁在写入者外面都不是"看一眼"该有的副作用。（抹除是另一扇门：
+    :func:`clear_on_disk`。）
+    """
+    if not os.path.exists(db):
+        return []
+    uri = pathlib.Path(os.path.abspath(db)).as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+    try:
+        return conn.execute(
+            "SELECT session_id, host, name, expires_at FROM cookies "
+            "WHERE expires_at > ? ORDER BY session_id, host, name", (now,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def sessions_on_disk(now: float | None = None) -> dict:
+    """磁盘那一份罐的普查（只有名字，没有值）。
+
+    文件不存在、不是 dhole 的表、或读不了，都交回空 —— 读不到就是读不到，不替
+    它编一行。
+    """
+    now = time.time() if now is None else now
+    try:
+        return _census(_disk_rows(_db_path(), now), now)
+    except Exception as e:
+        logger.debug("disk cookie jar census failed: %s", e)
+        return {}
+
+
+def sessions_everywhere() -> dict:
+    """这台机器上所有罐的普查：本进程的，加上磁盘上那一份（两者不是同一份时）。
+
+    两种存储按同一个 id 键。一个开了 ``DHOLE_PERSIST_CREDENTIALS=1`` 的进程会把
+    cookie 留在 ``sessions.db`` 里，而一个内存模式的进程既取不到、从前也看不见
+    它们：`sys_state` 对一份确实躺在磁盘上的凭据回 "no such session"，调用方
+    于是没有任何工具可以确认或抹掉它 —— 状态面把自己的普查范围说小了。
+
+    每行都带 ``store``：``memory``（只在本进程）/ ``disk``（共享文件，别的进程
+    写的）/ ``memory+disk``（同一个 id 两边都有）。`disk` 说的是**能看见、能
+    抹掉、不能取用** —— 内存模式的进程下一次带这个 id 的调用仍然从空罐开始。
+    """
+    here = sessions()
+    if uses_disk():
+        for entry in here.values():
+            entry["store"] = "disk"
+        return here
+    for entry in here.values():
+        entry["store"] = "memory"
+    there = sessions_on_disk()
+    for entry in there.values():
+        entry["store"] = "disk"
+    return _merge_census(here, there)
+
+
+def _merge_census(a: dict, b: dict) -> dict:
+    """同一个 id 在两边都有：host/名字取并集，到期取最早，并标明两边都有。"""
+    out = {sid: {"hosts": {h: list(names) for h, names in e["hosts"].items()},
+                 "cookies": e["cookies"], "expires_in_s": e["expires_in_s"],
+                 "store": e.get("store", "memory")}
+           for sid, e in a.items()}
+    for sid, e in b.items():
+        row = out.setdefault(sid, {"hosts": {}, "cookies": 0,
+                                   "expires_in_s": 0, "store": "disk"})
+        for host, names in e["hosts"].items():
+            have = row["hosts"].setdefault(host, [])
+            have.extend(n for n in names if n not in have)
+        # 同一颗 cookie（同 host 同名）只算一次：两边计数相加会把一行说成两行。
+        row["cookies"] = sum(len(v) for v in row["hosts"].values())
+        left = e["expires_in_s"]
+        row["expires_in_s"] = (left if not row["expires_in_s"]
+                               else min(row["expires_in_s"], left))
+        row["store"] = "memory+disk" if sid in a else "disk"
     return out
 
 
+def clear_on_disk(session_id: str = "") -> int:
+    """抹掉**磁盘那一份**罐里的行，即使本进程的罐在内存里。
+
+    删行是纯 SQL，不需要解密 —— 所以一个内存模式的进程能对另一个进程留下的持久
+    会话做「确认 + 抹掉」，而这正是 `sys_state` 从前缺的那一手。取用不在其中：
+    那些 cookie 不会被这个进程发出去（见 :func:`sessions_everywhere` 的 `store`）。
+    """
+    db = _db_path()
+    if not os.path.exists(db):
+        return 0
+    sid = (session_id or "").strip()
+    try:
+        conn = sqlite3.connect(db, timeout=5.0)
+    except Exception as e:
+        logger.debug("disk cookie jar unreadable for clear: %s", e)
+        return 0
+    try:
+        if sid:
+            cur = conn.execute("DELETE FROM cookies WHERE session_id=?", (sid,))
+        else:
+            cur = conn.execute("DELETE FROM cookies")
+        n = cur.rowcount
+        conn.commit()
+        return n
+    except Exception as e:
+        logger.debug("disk cookie jar clear failed: %s", e)
+        return 0
+    finally:
+        conn.close()
+
+
 def clear(session_id: str = "", now: float | None = None) -> int:
-    """丢掉一个会话的 cookie；``session_id`` 为空时清空整个罐。"""
+    """丢掉**本进程**罐里一个会话的 cookie；``session_id`` 为空时清空整个罐。
+
+    磁盘上那一份不在这里（本进程的罐可能就是它，见 :func:`uses_disk`）：
+    内存模式要抹另一个进程的持久会话，用 :func:`clear_on_disk`。
+    """
     sid = (session_id or "").strip()
     with _lock:
         try:

@@ -7,8 +7,6 @@
 回收那把尺早就豁免了 css_selector）；实质尺缺同一枚豁免。修：css_selector 在
 场的调用，substance 留空判 + basis 说清尺子为何不适用。
 """
-import pytest
-
 from dhole_mcp.context import _CSS_SELECTOR
 from dhole_mcp.models import ResponseModel
 from dhole_mcp.quality import _substance_verdict

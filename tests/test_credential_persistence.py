@@ -97,7 +97,34 @@ class TestTheDefaultIsMemory:
 
         assert identity.get("proxy") == "http://127.0.0.1:7890", \
             "操作者选过的默认在本进程内继续有效"
-        assert not db.exists()
+
+    # ── 加密值不是 legacy：另一个进程的持久罐归它所有 ──────────────
+    #
+    # 内存模式的第一次开罐会调 `_absorb_legacy_file`，那个函数假设 sessions.db
+    # 一定是 pre-17.1 的明文罐。若文件里是 dpapi: 加密值（另一个进程开着
+    # DHOLE_PERSIST_CREDENTIALS=1 写的），旧实现会把密文当 cookie 值吸进内存、再把
+    # 文件删掉——另一个进程的登录态凭空消失，而本进程拿密文当 cookie 发出去。
+    def test_an_encrypted_jar_is_left_for_the_process_that_owns_it(self, tmp_path):
+        db = tmp_path / "sessions.db"
+        _write_legacy_sessions_db(db, [(
+            "bob", "shop.example.com", "sid", "dpapi:Zm9v",
+            time.time() + 3600.0,
+        )])
+        sessions.reset_for_tests()
+
+        assert sessions.sessions() == {}, "密文不该被吸进内存"
+        assert sessions.header_for("bob", ME) == {}
+        assert db.exists(), "持久模式的罐不是 legacy，不许删"
+
+    def test_an_encrypted_identity_store_is_left_for_its_owner(self, tmp_path):
+        db = tmp_path / "identity.db"
+        _write_legacy_identity_db(db, [(
+            "proxy", "", "dpapi:Zm9v", time.time(),
+        )])
+        identity.close()
+
+        assert identity.all_rows() == [], "密文不该被当成明文默认值"
+        assert db.exists(), "持久模式的库不是 legacy，不许删"
 
 
 # ─── 落盘：DPAPI 加密 ────────────────────────────────────────────────

@@ -1551,8 +1551,9 @@ async def _simulate_human_behavior(page: Any) -> None:
 
 # ─── 浏览器会话基座 ───────────────────────────────────────────────────────────
 
-# 一张**驻留**页能活多久（刀9-7 · F9）。时长与 `server.AUTO_SESSION_IDLE_TIMEOUT`
-# 同一个数，理由也同一个：一个人看完一张图、把答案抄进下一次调用，用的是几十秒，
+# 一张**驻留**页能活多久（刀9-7 · F9）。曾经与 `server.AUTO_SESSION_IDLE_TIMEOUT`
+# 同一个数，现在分开了：那个默认涨到 1800（理由见 server.py 那段账），而驻留页问的
+# 是另一个问题 —— 一个人看完一张图、把答案抄进下一次调用，用的是几十秒，
 # 不是几毫秒；而 300 秒之后还把这页留着，占的是一份浏览器上下文与一个标签。
 # 到期不是"关掉浏览器"，只是**放掉这一页** —— 复用的那一刻惰性检查（见
 # `BrowserSession._pin_take`），因为具名会话刻意不进空闲回收那条监控。
@@ -1679,15 +1680,17 @@ class BrowserSession:
         self._browser: Any = None
         self._context: Any = None
         self._user_data_dir: Optional[str] = None
+        self._profile_lock: Optional[_ProfileLock] = None
         self._is_alive: bool = False
         self._fingerprint_profile: Optional[Dict[str, Any]] = None
         # 为 True 表示 connect_over_cdp 复用了端点自己的 default context（那一个装着
         # 用户登录态）。它给所有侵入性行为设闸：不往用户 profile 写 cookie、不在用户
         # 页面上打隐身补丁、detach 时不调 context.close()。
         self._cdp_attached: bool = False
-        # 为 True 表示 launch 路径跑在具名持久 profile 上，必须活过 close。17.0：还没有
-        # 任何东西点名一个（环境旋钮已撤），这套管线留给 B5 的 cred_defaults 参数 ——
-        # 在那之前每次 launch 都是临时目录。
+        # 为 True 表示 launch 路径跑在具名持久 profile 上，必须活过 close：目录不删、
+        # 锁在 close 里才放手。共享的 auto 会话今天总是 True（默认档 ``default``），
+        # 只有 ``profile=""``（"我要一次性空会话"）和"锁被别的进程拿着"这两条路是
+        # 临时目录。
         self._persistent_profile: bool = False
         # 刀9-7（F9）驻留槽：`{"page", "route", "listener", "stamp"}` 或 None。
         # 默认每一次 fetch 都是 `new_page()` + `goto()`，于是"上一调用读到的那一枚
@@ -1820,17 +1823,13 @@ class BrowserSession:
                 self._context = await _resolve_cdp_context(self._browser)
                 self._cdp_attached = True
             else:
-                # 持久 context：默认用临时目录；调用方点名具名 profile 时用
-                # ~/.dhole/profiles/<name>/ 下那一份（17.0 起没有环境旋钮，只有参数面
-                # 能点名 —— 见文件上方 DHOLE_BROWSER_PROFILE 已注销那条注记）。
-                if self._profile_name:
-                    from dhole_mcp import paths as _paths
-                    pdir = _paths.profiles_dir() / self._profile_name
-                    _paths.ensure_private_dir(pdir)
-                    self._user_data_dir = str(pdir)
-                    self._persistent_profile = True
-                else:
-                    self._user_data_dir = tempfile.mkdtemp(prefix="dhole_browser_")
+                # 持久 context：具名 profile 落在 ~/.dhole/profiles/<name>/（退出
+                # 不删，cookie 与登录态跨进程跨天活着）；没点名就是临时目录。
+                # 17.0 起没有环境旋钮能点名它，只有参数面（cred_defaults 的 profile、
+                # 以及 auto 会话的默认档）。同一份 profile 的单写者权在这里判定，
+                # 拿不到锁退回临时目录。
+                self._user_data_dir, self._persistent_profile, self._profile_lock = (
+                    resolve_user_data_dir(self._profile_name))
                 persistent_opts = {**browser_options, **context_options, "user_data_dir": self._user_data_dir}
                 # 2.2 · 起进程是这次调用里最像"网络慢"的一段时间（这台机器实测 3–5 秒，
                 # `LAUNCH_PROBE_TIMEOUT_S` 那句注释里量的就是它），而它今天一句都不发。
@@ -1918,6 +1917,11 @@ class BrowserSession:
                     shutil.rmtree(self._user_data_dir, ignore_errors=True)
                 except Exception:
                     pass
+            # 具名 profile 的独占权随浏览器一起放手：留着不放，第二个宿主永远只能
+            # 用临时目录，而且没人看得见原因。
+            if self._profile_lock is not None:
+                self._profile_lock.release()
+                self._profile_lock = None
             self._user_data_dir = None
 
     async def _cleanup_playwright(self) -> None:
@@ -3512,3 +3516,145 @@ def is_browser_available_cached() -> Optional[bool]:
     check_browser_available()（在工作线程里）。
     """
     return _browser_available
+
+
+#: 孤儿 profile 的年龄门槛。正常关闭会 rmtree（见 ``BrowserSession.close``），
+#: 但被 kill、崩溃、测试 worker 死掉时那一步不执行 —— 那些目录会一直躺在
+#: 系统 temp 里。实测一台机器堆了 64 个、合计 4.5 GB。
+ORPHAN_PROFILE_MIN_AGE_S = 6 * 3600
+
+
+def sweep_orphan_profiles(
+    root: Path | None = None,
+    *,
+    now: float | None = None,
+    min_age_s: float = ORPHAN_PROFILE_MIN_AGE_S,
+    keep: tuple[str, ...] = (),
+) -> tuple[int, int]:
+    """清掉 temp 里没人用、且已经放旧的 ``dhole_browser_*`` 目录。
+
+    "没人用"靠一次改名判定：目录里有打开的文件时，``os.rename`` 在 Windows
+    上抛 ``OSError``（共享冲突），比枚举全部进程命令行便宜，也不需要平台分支。
+    改成功即说明没有活进程持有它，随即删除；改失败就留着，下一次启动再说。
+
+    年龄是第二道闸：Chrome 会持续写 profile，活着的目录 mtime 一直新鲜，
+    6 小时没动过的基本可以断定是遗骸。``.stale`` 后缀是"已经判定为死、但上次
+    没删干净"的标记，它不再看年龄，直接删。
+
+    只认 ``dhole_browser_`` 前缀，且跳过 ``keep`` 里点名的目录（当前进程自己
+    那一份）。返回 ``(删掉, 保留)``，绝不抛 —— 清扫失败不能挡住启动。
+    """
+    import shutil
+
+    base = Path(root) if root is not None else Path(tempfile.gettempdir())
+    cutoff = (now if now is not None else time.time()) - min_age_s
+    removed = kept = 0
+    try:
+        entries = list(base.iterdir())
+    except OSError:
+        return (0, 0)
+    for entry in entries:
+        if not entry.name.startswith("dhole_browser_") or entry.name in keep:
+            kept += 1
+            continue
+        marked = entry.name.endswith(".stale")
+        if not marked:
+            try:
+                if entry.stat().st_mtime > cutoff:
+                    kept += 1
+                    continue
+            except OSError:
+                continue
+        stale = entry.with_name(entry.name + ".stale")
+        try:
+            os.rename(entry, stale)
+        except OSError:
+            kept += 1  # 有活进程拿着它，不动
+            continue
+        shutil.rmtree(stale, ignore_errors=True)
+        removed += 1
+    return (removed, kept)
+
+
+#: 持久 profile 的单写者锁文件名。Chrome 的 user-data-dir 是单写者：第二个进程
+#: 拿同一个目录起不来（SingletonLock 冲突），或者更糟 —— 起得来但两个进程互相踩
+#: Preferences。与其等 Chrome 用一句难懂的报错说话，不如在启动前用 advisory 文件
+#: 锁判定清楚。进程退出时内核自动释放，不会留下要人工清理的死锁。
+_PROFILE_LOCK_NAME = ".dhole-profile.lock"
+
+
+class _ProfileLock:
+    """一份持久 profile 的独占权。``acquire()`` 交回是否拿到。"""
+
+    def __init__(self, directory: Path) -> None:
+        self._path = Path(directory) / _PROFILE_LOCK_NAME
+        self._fh = None
+
+    def acquire(self) -> bool:
+        fh = None
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(self._path, "a+b")
+            if fh.seek(0, os.SEEK_END) == 0:
+                fh.write(b"\0")
+                fh.flush()
+            fh.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._fh = fh
+            return True
+        except OSError:
+            if fh is not None:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+            return False
+
+    def release(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is None:
+            return
+        try:
+            fh.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            try:
+                fh.close()
+            except Exception:
+                pass
+
+
+def resolve_user_data_dir(
+    profile_name: Optional[str],
+) -> tuple[str, bool, Optional[_ProfileLock]]:
+    """这次用哪个 user-data-dir：``(目录, 是否持久, 要持有的锁)``。
+
+    具名 profile 落在 ``~/.dhole/profiles/<name>/``，退出不删，于是 cookie 与
+    登录态跨进程、跨天活着。同一份 profile 同时只允许一个进程用 —— 拿不到锁就
+    退回临时目录：让第二个宿主继续干活，只是不共享那份登录态。静默降级在这里
+    是错的，所以调用方会记一行日志说明这次为什么是临时目录。
+    """
+    if not profile_name:
+        return tempfile.mkdtemp(prefix="dhole_browser_"), False, None
+    from dhole_mcp import paths as _paths
+    pdir = _paths.profiles_dir() / profile_name
+    _paths.ensure_private_dir(pdir)
+    lock = _ProfileLock(pdir)
+    if lock.acquire():
+        return str(pdir), True, lock
+    logger.warning(
+        "profile %r is held by another dhole process; this session uses a "
+        "temporary profile (cookies will not persist)", profile_name)
+    return tempfile.mkdtemp(prefix="dhole_browser_"), False, None

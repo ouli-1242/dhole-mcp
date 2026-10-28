@@ -885,6 +885,134 @@ python evals/vertical_search_baseline.py --capture  # 重抓冻结语料（--for
 `fetch_content` 之后的正文质量，也没有覆盖神经重排。扩展题集时只增不减，并为每题
 写清期望的来源，不拿一次偶然结果当标准答案。
 
+### 真实查询复测：67 题之外的唯一判据（17.5 未发布）
+
+67 题冻结语料只能分辨 8.6 pp 以上的差异（`docs/plan-models-and-cli.md` §2.3），
+而模型间差距是 0.6 pp —— 连实测不行的 `ms-marco` 都能打 0.546。真实场景没有
+qrels，判据改成「top-5 里我认可几条」，配对 bootstrap 95% 区间不跨 0 才算数。
+
+查询从两处来：
+
+- 手工记下的真实搜索（计划 §2.5 路径①）；
+- `DHOLE_QUERY_LOG=1` 打开的本地查询日志（`~/.dhole/queries.jsonl`；只记查询词与
+  模式 / 结果数 / 引擎 / 重排模型，不含结果、URL、摘要，不联网）。
+
+流程（`evals/real_query_eval.py`，人工只在勾选那一步出现）：
+
+```bash
+# 1) 每条查询真搜一次，存同一批候选（title+snippet）
+python evals/real_query_eval.py fetch --queries real.jsonl --out evals/.runtime/real_eval/r1
+# 或从查询日志里取前 100 条
+python evals/real_query_eval.py fetch --from-log --limit 100 --out evals/.runtime/real_eval/r1
+# 2) 两颗模型给同一批候选打分（子进程，各用 DHOLE_RERANK_MODEL）
+python evals/real_query_eval.py score --run-dir evals/.runtime/real_eval/r1 --model bge-zh
+python evals/real_query_eval.py score --run-dir evals/.runtime/real_eval/r1 --model mmarco
+# 3) 盲表：A/B 顺序随机、隐去模型名
+python evals/real_query_eval.py emit --run-dir evals/.runtime/real_eval/r1
+# 打开 sheet.html 勾「这条我要」→ 下载 judgments.json
+# 4) 每题「top-5 认可几条」+ 配对 bootstrap 95% 区间
+python evals/real_query_eval.py report --run-dir evals/.runtime/real_eval/r1 \
+    --judgments judgments.json --baseline bge-zh --candidate mmarco
+```
+
+边界：`fetch` 用当前默认重排器生成一次候选集，两颗模型只换打分器（同候选、同
+`title+snippet`）；候选生成本身的偏差两模型共同承担，不混进差值。`report` 在
+n < 100 时只报本次分辨率（2.8·SD/√n），不给换型结论。`mmarco` 首次打分要下载
+~119 MB；`bge-zh` 已装则直接用。下载被网络卡住时，可把 `model.onnx` /
+`tokenizer.json` / `vocab.txt` 手工放进 `~/.dhole/models/<name>/`（加载时会按
+注册表里的发布方 sha256 校验），`dhole --doctor` 能看到模型的落位状态。
+
+另有一条**不依赖人工勾选**的真实标注集：`C-MTEB/T2Reranking`（300 条真实中文查询，
+正负例人工标注）。`evals/fetch_eval_sets.py --rows 300` 取前 300 行；datasets-server
+不可达时，可从 hf-mirror 取 parquet（`data/dev-00000-of-00001-*.parquet`）再用
+pyarrow 读成同样的 `{query, positives, negatives}`。它是集 B，和集 A 的 67 题各出
+各的数，永不合并。300 题比 67 题强，但仍不是无限分辨率——报告必须带配对区间，
+不许只报均值。
+
+**2026-10-27 实跑（T2Reranking 前 300 行，真人标注，中文）**：
+
+| 模型 | P@5 | nDCG@10 | MRR | 与 bge-zh 的配对差（P@5） | 95% 区间（P@5） | 跨 0？ |
+|---|---|---|---|---|---|---|
+| `bge-zh` | 0.6085 | 0.7236 | 0.7762 | — | — | — |
+| `mmarco` | 0.6152 | 0.7311 | 0.7871 | +0.0067 | [-0.0087, +0.0227] | **是** |
+
+nDCG@10 的配对差 +0.0076，区间 [-0.0069, +0.0221]；MRR +0.0109，区间
+[-0.0176, +0.0393]——三项全部跨 0。本次样本能分辨约 2.2 pp（P@5 的
+2.8·SD/√n），实测差 0.7 pp。**结论：没有证据支持换默认档，维持 `bge-zh`。**
+这次是 300 条真人标注、候选不饱和（P@5≈0.61），不是「垃圾模型都考得好」的
+那把尺子；但它是 passage rerank，不是 dhole 的 SERP 候选——dhole 自己的真实
+查询盲评仍要等 P1 语料（`DHOLE_QUERY_LOG` 或手工记录）。
+
+- T2Reranking 只跑了两颗在册模型（`bge-zh` / `mmarco`）；0.6B 级重排器没有测：
+  候选的 ONNX/GGUF 在 571MB–995MB，超出「单颗 ≤300MB」的常驻磁盘预算，按计划
+  只能走异步或 `deep` 档并单独批；本轮不接。
+- 真实查询盲评的人工勾选还没有产出：`DHOLE_QUERY_LOG` 刚加上，需要先攒 50–100
+  条真实查询；在攒够之前，任何「dhole 自己的真实场景」结论都不成立。
+
+**2026-10-27 recall 字面候选的洞（计划 §3.2 的 P2 代理测量）**：
+
+`evals/recall_lexical_gap.py` 把 T2 的 4,955 条 passage 当成一台机器读过的缓存，
+逐条查询走 `recall_pages` 的第一段（`focus._tokens` 最多 8 个词 → 子串预筛 →
+BM25；不接神经重排）：
+
+| 指标 | 值 |
+|---|---|
+| 查询 / passage / 正例 | 300 / 4,955 / 2,253 |
+| 无正例的查询 | 4（不参与可达率与 R@k 的分母） |
+| 零候选查询 | 0 / 300（0.0%） |
+| 正例不可达查询 | 1 / 296（0.3%） |
+| 字面 R@5 / R@10 / MRR | 0.9257 / 0.9595 / 0.7474 |
+| 候选数（中位 / 均值） | 443 / 578.5 |
+
+唯一一条正例不可达是「优酷下载的圣斗士星矢如何改成日语观看」——它的正例只有
+一条 URL 和一句「日语版的」的回复片段，不含查询里的任何词；整页会带标题
+「圣斗士星矢」，所以这是 passage 语料的形状问题，不是真实的零重合。
+
+读法：候选生成的洞（嵌入唯一能补的那块）在这批真实查询上是 0.3%，远低于计划
+§3.2 的 10% 线；R@10 与正例可达率之间的约 3.7 pp 是 BM25 **排序**损失，换嵌入
+做候选生成不补这一块。边界照旧：T2 是搜索词，不是「读过之后凭记忆回想」的改写，
+真实回忆查询要等 P1 的 `DHOLE_QUERY_LOG` 语料；在那之前 P4（embedding）不启动，
+P2 的 ②步（词形归一）也不做。
+
+## cross_check 归因质量（2026-10-28，17.5 未发布）
+
+`evals/cross_check_attribution.py` 用 `evals/queries.jsonl` 的真实查询量「句子→claim
+挂错率」。24 条查询在词边界切成两个子问题（19 条切得动），分别搜索取回 top-5
+标题+摘要，池化后每个结果都带着「它来自哪个子问题」的标签；归因仍走生产代码的
+`_tokenize`/`_vectors`/`ATTRIBUTION_FLOOR=0.12`。**clear 子集** = 句子含本 claim
+独有词、且不含另一 claim 独有词 —— 这些句子的归属没有歧义，挂错就是真挂错。
+
+同一批句子上并排跑 `--window 0`（当前：单句归因）与 `--window 1`（句子 + 前后
+各一句），同时用 legacy 判据（否定极性套所有非开放式问句）与新判据（否定只服务
+yes/no 问句）各判一次冲突：
+
+| 归因口径 | 句子 / 归因上 | 挂错 | clear 子集 / 挂错 | oppose（legacy） | oppose（新） |
+|---|---|---|---|---|---|
+| 单句（window 0） | 506 / 273 | 29（10.6%） | 184 / **0** | 16（全为 negation-only） | 0 |
+| ±1 句（window 1） | 506 / 350 | 22（6.3%） | 220 / 1（0.4%） | 33（全为 negation-only） | 0 |
+
+判决：
+
+- **不引入更长滑窗。** 窗口 1 的原始挂错率更低（6.3% vs 10.6%），但那是分母从
+  273 涨到 350 带来的，不是错配被修正：clear 子集从 0 挂错变成 1 句挂错（Redis
+  RDB/AOF 的一条句子被前后句的上下文带向另一 claim）。滑窗的成本（跨句上下文、
+  把邻近 claim 的话带进来）换不到 clear 准确率。
+- **否定只留给 yes/no 问句（已落地）。** 同一批数据上，legacy 的 16 条 oppose 全
+  是 negation-only 误判（"without memory leaks"、"no traffic"、"也不例外"，以及
+  查询本身含 not 的名词词组）；新判据把 oppose 降到 0。陈述句与名词词组的冲突
+  改由数字/反义（含来源之间的数字/反义分歧）判，开放式问句行为不变。
+- **残余噪声**：前一轮 12 条小样本里见过 numeric 把版本号当数字（"pydantic v2" vs
+  "v2.14.1"）；本轮 19 条未出现。要修就单独给版本号加形状判定，这次不扩大改动。
+- 原始挂错集中在共享主题的歧义句（同一查询切出的两个 aspect 都谈这个主题），
+  不是 clear 子集里的错配；因此没有证据支持改归因算法本身。
+
+复现（真实搜索，计数会随当日结果波动；legacy/新判据在同一批 blocks 上对照）：
+
+```bash
+python evals/cross_check_attribution.py run --limit 24 --max-results 5 \
+    --window 0 --window 1
+```
+
 ### 已知未覆盖
 
 - A/C 两档需要在当前版本上重跑，三档才可比；A 档还得先把 `A.schema.json` 真的导出

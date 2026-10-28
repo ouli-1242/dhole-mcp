@@ -57,7 +57,7 @@ from time import time
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import Field, model_serializer
 
 from dhole_mcp import injection
 # 钳制文案的唯一作者。crawl 的 summary 不经过 _with_agent_hints（它是
@@ -225,8 +225,8 @@ class CrawlResponseModel(RefusalHandle):
     next_action: str = Field(default="", description="Obvious next call when one exists (continue crawl / fetch a page).")
     ssrf_recheck: str = Field(default="", description="Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (a fake-ip proxy) — the SSRF posture of the WHOLE crawl, stated once. Before this field existed a crawl said nothing about it at all: the per-page receipts live on the web_read results that crawl consumes internally and never reaches the caller, so the one security posture that a 40-page run should disclose was dropped with the pages' own metadata.")
     identity_applied: str = Field(default="", description="Names only (never values) of what `cred_defaults` supplied for the pages this run fetched — one line for the whole run, gathered from each page's own receipt rather than recomputed from the store. It exists for the same reason as `ssrf_recheck`: a crawl row is a trimmed page report, so the per-page 'this was fetched with your credentials' died inside crawl. Read it before concluding the crawl saw the site the way a visitor does — a run carrying your stored auth is your logged view of that host, page after page.")
-    plan_id: str = Field(default="", description="The URL list is held server-side under this id (1h TTL). web_discover sets it on every map, and on a map the id holds the WHOLE map: the rows this answer shipped first, then the rows that were never sent. A page-by-page web_crawl sets it whenever it stopped with URLs still queued (max_pages, the whole-run character budget, or the deadline) and the id then holds exactly those never-requested URLs, in the order this run would have sent them. Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list, or resume_token='<plan_id>:<rows shipped>' to web_discover for the rest of the map itself.")
-    next_resume_token: str = Field(default="", description="Set when a run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped, without re-fetching the pages it already returned. A truncated MAP carries it too, and on a map it is the cursor into the held-back rows - web_discover(resume_token=...) returns the next rows without re-walking the site. Absent when the plan is exhausted.")
+    plan_id: str = Field(default="", description="The URL list is held under this id in the ONE server process that created it (memory only, 1h TTL; it is not shared with another process, so a restart or a second server starts with an empty store and cannot resume it). web_discover sets it on every map, and on a map the id holds the WHOLE map: the rows this answer shipped first, then the rows that were never sent. A page-by-page web_crawl sets it whenever it stopped with URLs still queued (max_pages, the whole-run character budget, or the deadline) and the id then holds exactly those never-requested URLs, in the order this run would have sent them. Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list, or resume_token='<plan_id>:<rows shipped>' to web_discover for the rest of the map itself.")
+    next_resume_token: str = Field(default="", description="Set when a run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped, without re-fetching the pages it already returned. It resolves only in the server process that issued it - the plan lives in that process's memory, so a restart or another process answers 'no plan held here'. A truncated MAP carries it too, and on a map it is the cursor into the held-back rows - web_discover(resume_token=...) returns the next rows without re-walking the site. Absent when the plan is exhausted.")
 
     @model_serializer(mode="wrap")
     def _map_rows_carry_only_what_differs(self, handler):
@@ -1289,8 +1289,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             # 走到这里只可能是时钟砍的，而 web_discover 的 wire 上没有 deadline_ms 那颗
             # 旋钮 —— 对拿着 `timeout=` 的人喊抬 `deadline_ms`，就是 C2 那一族"把调用方
             # 支到一个他够不着的旋钮上"。
-            fix = (f"The {len(held)} URL(s) already in hand are held under plan "
-                   f"{hold_plan_id}: web_discover(url='{url}', "
+            fix = (f"The {len(held)} URL(s) already in hand are held in this "
+                   f"process under plan {hold_plan_id}: web_discover(url='{url}', "
                    f"resume_token='{plan_token(hold_plan_id, 0)}') returns them "
                    "without re-fetching the sitemap. Otherwise "
                    + fix[0].lower() + fix[1:])
@@ -1391,7 +1391,7 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
         # 同时出口，缺一件就是一次静默截断——本次修复的整批罪名就是这一条：
         #   ① 旗子：truncated_by_total_chars / truncated_by_time（下面 return 里置）；
         #   ② 总量：pages_discovered=map_total（地图多大），len(pages)=交回几行；
-        #   ③ 游标：next_resume_token=<plan_id>:<下一个行号>，尾巴存在服务器侧；
+        #   ③ 游标：next_resume_token=<plan_id>:<下一个行号>，尾巴存在本进程内存里；
         #   ④ 散文：这一句里带数，用量日志一行也能读出"少了多少、为什么、怎么续"。
         summary += (
             f" · {'the char budget' if stopped_by == 'budget' else 'the deadline'} held "
@@ -1400,8 +1400,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             + (f"{max_total_chars:,} you set" if stopped_by == "budget"
                else "deadline you set"))
         next_action += (
-            f" {len(held)} map row(s) did not ship and are held server-side under plan "
-            f"{hold_plan_id}: web_discover(url='{url}', "
+            f" {len(held)} map row(s) did not ship and are held in this server "
+            f"process under plan {hold_plan_id}: web_discover(url='{url}', "
             f"resume_token='{plan_token(hold_plan_id, ok)}') returns rows "
             f"{ok + 1}-{map_total} without re-fetching the sitemap. To get them "
             f"another way: raise max_total_chars (up to "
@@ -2290,9 +2290,32 @@ async def web_crawl(
         elif ok == 0 and pages_crawled > 0 and not discover_only:
             # 地图模式从不抽正文，所以那边 ok == 0 是**预期**形状，不能诊断成
             # "站点可能不可达"。
-            next_action = ("All crawled pages returned no content. The site may be "
-                          "unreachable, require JavaScript, or block automated access. "
-                          "Try web_read on a specific URL for more diagnostics.")
+            #
+            # 0 内容也有两种形状：站点真的不给正文，或者这一趟**没走到有正文的页**
+            # —— 作用域把起点页之外的所有候选都挡在门外时就是后者。通用兜底句
+            # "站点可能不可达/需要 JS" 在前者成立，在后者会把调用方支去修站方；
+            # 2026-10-28 第二轮 H2/K4 实测：`path_include=['/work']` 筛掉 7 个
+            # 候选，next_action 却一句没提作用域。这里按 summary 用的同一组计数
+            # 分流，把"你筛掉了要读的页"说到出路里。
+            rejected = link_stats["links_rejected_by_scope"]
+            seen = link_stats["links_seen"]
+            if ((path_include or path_exclude) and len(pages) <= 1
+                    and not truncated_total_chars and not heap and rejected):
+                scoped = (f"path_include={list(path_include or [])} / "
+                          f"path_exclude={list(path_exclude or [])}")
+                next_action = (
+                    f"Only the start page came back, and its content did not pass "
+                    f"the extraction verdict; {scoped} then rejected {rejected} of "
+                    f"the {seen} same-domain candidate link(s) it offered and left "
+                    "nothing queued, so the pages that might carry content were "
+                    "never read. Change the scope (a pattern names a path subtree; "
+                    "'/docs' does not match '/docs-old'), or web_read the start URL "
+                    "with extraction_type='html' / force_fetcher='stealthy' to see "
+                    "what that page actually returns.")
+            else:
+                next_action = ("All crawled pages returned no content. The site may be "
+                              "unreachable, require JavaScript, or block automated access. "
+                              "Try web_read on a specific URL for more diagnostics.")
 
     from dhole_mcp.security import recheck_posture_note
     _applied, _overrun, _cap, _dur_ms, _budget_words = _time_budget_reading(
@@ -2481,9 +2504,9 @@ def _emit_map_tail(result, *, url: str, held: list[str]) -> None:
     result.summary += (f" · plan {plan_id} holds the whole map: {total} row(s), "
                        f"{len(shipped)} shipped here, {len(tail)} never sent")
     bits = (
-        f" The {len(tail)} map row(s) that were never sent are held here with the "
-        f"{len(shipped)} that shipped, under plan {plan_id} ({total} row(s) = the "
-        f"whole map, 1h): web_discover(url='{url}', "
+        f" The {len(tail)} map row(s) that were never sent are held in this process "
+        f"with the {len(shipped)} that shipped, under plan {plan_id} ({total} row(s) "
+        f"= the whole map, 1h in memory): web_discover(url='{url}', "
         f"resume_token='{plan_token(plan_id, len(shipped))}') lists rows "
         f"{len(shipped) + 1}-{total} and spends no request.")
     if shipped:

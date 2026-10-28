@@ -169,10 +169,18 @@ testpaths = ["tests"]
 # silently runs the stale installed copy and src/ edits go untested. This has
 # bitten the project 4+ times. pythonpath (pytest 7+) wins over install.
 pythonpath = ["src"]
-# `-n 8` and `--timeout=120` are not decoration; both were measured on this tree
-# (7,415 tests, 2026-10-24):
+# 默认只跑 `smoke` 那一层：每个子系统最宽的那几条守卫（安全闸、wire 协议、
+# 服务端、页面动作、搜索、抓取、解析、缓存、路径、配置面、robots），实测
+# 1,148 条 / 27 秒。全量仍在，随时可跑：
+#   pytest -m "not e2e and not live"      → 8,080 条 / 115 秒
+# 为什么不全量默认：这套测试的命名就是规格书，删掉就没了；但每次都等两分钟
+# 也不是唯一选择 —— 标记把「跑得快」和「知道得多」解耦。新增测试文件想进默认
+# 层就打上 `pytestmark = pytest.mark.smoke`（放在所有 import 之后）；不打也能
+# 在 `-m "not e2e and not live"` 那一层跑到，没有任何东西会因此变红。
+# `-n 8` 和 `--timeout=120` 不是装饰，都是在这棵树上量出来的
+# （7,415 tests, 2026-10-24）：
 #   serial      617s
-#   -n 8        131s   ← the default
+#   -n 8        131s
 #   -n 16       107s   (diminishing; use it when the box has the RAM)
 #   -n 32      CRASH   xdist INTERNALERROR — `-n auto` resolves to cpu_count, and
 #                      each worker imports its own trafilatura + patchright, so 32
@@ -180,13 +188,14 @@ pythonpath = ["src"]
 #                      use `-n auto` here.
 # There is no hotspot to optimise: the slowest single test is 16s, the slowest 45
 # add up to 34% of the run, and the other 7,370 average 55ms. Parallelism is the
-# only lever that moves this suite.
+# only lever that moves the long tail.
 # `--timeout=120` is the hang guard: a deadlocked run used to sit at 0% CPU for
 # 17 minutes with no output. 120s is 7x the slowest real test, so it can only fire
 # on a genuine hang. `pytest -n 0` is the escape hatch when debugging one test or
 # running `-m e2e` (real subprocesses).
-addopts = ["-m", "not e2e and not live", "-n", "8", "--timeout=120"]
+addopts = ["-m", "smoke and not e2e and not live", "-n", "8", "--timeout=120"]
 markers = [
+    "smoke: the broad per-subsystem guards that run by default (1,148 tests / 27s). Everything else is opt-in with `pytest -m \"not e2e and not live\"`.",
     "e2e: end-to-end tests that spawn a real dhole.exe subprocess. Skip by default in CI; run manually with `pytest -m e2e`.",
     "real_state_paths: opt out of the autouse state-file isolation; the test asserts where paths.py resolves state files, so redirecting them would make it verify nothing.",
     "live: tests that hit the real network (search engines, real robots.txt). Never in the default run; opt in with `-m live`. Engine tests additionally pass --engine-fixtures to capture/diff SERP fixtures.",

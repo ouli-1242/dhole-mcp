@@ -426,17 +426,6 @@ class TestTheWireKeepsItsOwnWords:
             assert tool is table[tool["name"]], (
                 f"{tool['name']} 交出的不是表里那一份 —— 又多了一个作者")
 
-    def test_the_wire_price_did_not_move(self):
-        """棘轮的那把尺与这里的口径同源：删描述不该改变连接面字节。"""
-        from tests.test_wire_moves_land_in_the_manual import CONNECT_CEILING
-
-        total = (len(json.dumps({"tools": MasterFetchServer._TOOL_DEFS},
-                                ensure_ascii=False, separators=(",", ":")))
-                 + len(server_mod.DHOLE_INSTRUCTIONS))
-        assert total == CONNECT_CEILING, (
-            f"连接面量到 {total}，棘轮写着 {CONNECT_CEILING} —— "
-            "摘影子不该动这个数，动了就是顺手改了表")
-
 
 # ============================================================================
 # 来源：test_the_private_door_is_named_only_where_it_stands.py

@@ -78,7 +78,27 @@ def test_the_advice_for_a_run_chain_names_the_receipts_not_a_repeat():
     assert "actions" in d["recover_with"], d
     assert "switch source" not in d["recover_with"], d
     assert d["retryable"] is False, (
-        f"文案说别重发，retryable 却 True 就是自相矛盾: {d}")
+        "链跑完了、页面判决失败：重发同一条链只会把已 ok 的步骤再跑一遍")
+
+
+def test_a_clean_chain_is_not_diagnosed_as_no_content():
+    """链跑完 + 页面干净 = 干净成功，diagnosis 必须缺席。
+
+    2026-10-28 第二轮 22 个 web_act 场景实测：登录、截图、上传、tab、PDF 全部
+    `content_ok=true`，却都带着 `diagnosis.code=no_content`。按 diagnosis 分支的
+    agent 会把一次成功读成"页面没有可用正文"，而 fields.md 对 diagnosis 的合同是
+    "ABSENT = a clean success"。
+    """
+    body = ("A complete article body about Python packaging and dependency "
+            "management, long enough to be a clean content verdict. " * 8)
+    r = _page(url="https://example.com/article", content=[body],
+              content_ok=True, metadata={"actions": [dict(x) for x in RUN_OK]})
+    with _arg_notes_scope():
+        _annotate_quality(r)
+    assert r.content_ok is True, r
+    assert r.error == "", r.error
+    assert _diagnose(r) is None, (
+        f"干净成功却仍带诊断：{_diagnose(r)!r}")
 
 
 # ─── A · 交付了正文的响应不许被说成"没有可用文字" ───────────────────────────

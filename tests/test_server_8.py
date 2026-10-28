@@ -88,7 +88,7 @@ def test_the_cause_sentence_still_tells_which_action_needs_the_resources():
     """截图是唯一"产物就是渲染出来的页面"的动作 —— 那句话得说的是这一件，不是泛泛的慢。"""
     assert "the only action whose" in inspect.getsource(MasterFetchServer.web_read)
     doc = inspect.getdoc(actions_mod.actions_want_visual) or ""
-    assert "product IS the rendered page" in doc, doc[:120]
+    assert "产物就是渲染后的页面本身" in doc, doc[:120]
 
 
 def test_the_idle_cap_and_the_launch_estimate_are_public_because_two_modules_read_them():
@@ -164,12 +164,10 @@ def test_a_budget_above_the_floor_still_runs_the_chain():
 
 
 def test_no_wire_face_moved_while_this_landed():
-    """这一刀全在响应侧与拒绝话术里：常驻层一个字都没加（棘轮的余量是 0）。"""
-    import json
-    from pathlib import Path
-    lock = json.loads((Path(__file__).resolve().parents[1] / "tests"
-                       / "tool_defs_lock.json").read_text(encoding="utf-8"))
-    assert lock["tools"] == 13
+    """这一刀全在响应侧与拒绝话术里：`screenshot` 没有变成别处的一个参数。
+
+    这里不再顺手钉"工具总数还是 13"——那是账本，第 14 颗工具落地那天它只会挡路。
+    """
     assert "screenshot" not in str(
         [p for d in MasterFetchServer._TOOL_DEFS
          for p in d["inputSchema"]["properties"]])

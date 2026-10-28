@@ -28,13 +28,14 @@ import logging
 import math
 import os
 import platform
+import threading
 
 from dhole_mcp import env_registry
 import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from dhole_mcp import paths
 
@@ -289,13 +290,23 @@ def _model_urls(model: RerankerModel, name_or_remote: str) -> list[str]:
 
 def _download_model_file(name: str, dest: Path) -> bool:
     """为**这台** CPU 的变体下载一个模型文件，逐个端点尝试。"""
-    model = active_model()
+    return _download_model_file_for(active_model(), name, dest)
+
+
+def _download_model_file_for(model: RerankerModel, name: str, dest: Path,
+                             progress: Optional[Callable[[str, int, int], None]] = None,
+                             ) -> bool:
+    """指定模型的下载入口；``_download_model_file`` 保留为当前档的旧拼法。"""
     selected = paths_for(model)
     remote = selected.get(name)
     if not remote:
         return False
     for url in _model_urls(model, remote):
-        if _download_file(url, dest):
+        if progress is None:
+            ok = _download_file(url, dest)
+        else:
+            ok = _download_file(url, dest, progress=progress)
+        if ok:
             return True
     return False
 
@@ -396,7 +407,9 @@ class _Reranker:
 _IDLE_TIMEOUT = 90.0  # 这么久没有收到任何字节就中止下载
 
 
-def _download_file(url: str, dest: Path) -> bool:
+def _download_file(url: str, dest: Path,
+                   progress: Optional[Callable[[str, int, int], None]] = None,
+                   ) -> bool:
     """把文件流式写到磁盘。成功交回 True。
 
     要扛住这个网络最糟的脾气：HF 的 CDN 会慢慢滴字节，然后卡住。我们 (a) 从遗留的
@@ -406,6 +419,9 @@ def _download_file(url: str, dest: Path) -> bool:
     把整份正文接在旧前缀后面会弄坏文件。现场实测：一个 119MB 的模型文件在 1.7MB 处
     被切断；删掉残缺文件让每一次重试都从零开始。（无字节超时读 `_IDLE_TIMEOUT`，
     数量只有一处定义。）
+
+    ``progress(name, done, total)`` 是给 `dhole models fetch` 的读数：``total`` 在
+    服务器不给 Content-Length 时是 0；续传时 ``done`` 从已有字节数起算。
     """
     tmp = dest.with_suffix(dest.suffix + ".part")
     try:
@@ -426,6 +442,8 @@ def _download_file(url: str, dest: Path) -> bool:
                 total = (int(total_hdr) + resume_at) if total_hdr else 0
                 done = resume_at
                 last_byte = time.monotonic()
+                if progress:
+                    progress(dest.name, done, total)
                 while True:
                     chunk = r.read(1 << 16)
                     if not chunk:
@@ -433,6 +451,8 @@ def _download_file(url: str, dest: Path) -> bool:
                     f.write(chunk)
                     done += len(chunk)
                     last_byte = time.monotonic()
+                    if progress:
+                        progress(dest.name, done, total)
                     if done % (1 << 24) == 0:
                         logger.info(f"  ... {dest.name}: {done:,} bytes")
                     if time.monotonic() - last_byte > _IDLE_TIMEOUT:
@@ -467,9 +487,19 @@ def _reject(reason: str) -> None:
     _reranker_unavailable_reason = reason
 
 
-def _ensure_model() -> Optional[tuple[Path, Path]]:
-    """确保 model.onnx + tokenizer.json 都在且有效。交回路径，否则 None。"""
-    model = active_model()
+def _ensure_model(
+    model: Optional[RerankerModel] = None,
+    progress: Optional[Callable[[str, int, int], None]] = None,
+    model_dir: Optional[Path] = None,
+) -> Optional[tuple[Path, Path]]:
+    """确保 model.onnx + tokenizer.json 都在且有效。交回路径，否则 None。
+
+    ``model`` 缺省 = 当前档（测试与搜索走同一条老路）；``dhole models fetch``
+    点名另一档时显式传入。``progress`` 只喂下载进度，不改变完整性判据。
+    """
+    explicit = model is not None
+    if model is None:
+        model = active_model()
     selected = paths_for(model)
     if not selected:
         _reject(
@@ -477,7 +507,17 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
             f"{platform.machine()!r} - choose {DEFAULT_MODEL} with DHOLE_RERANK_MODEL"
         )
         return None
-    model_dir = active_model_dir()
+    if model_dir is None:
+        model_dir = (paths.models_dir() / model.name
+                     if explicit else active_model_dir())
+
+    def _fetch(name: str, dest: Path) -> bool:
+        # 无参调用（搜索 / 旧测试）仍走 `_download_model_file` 这个补丁点，
+        # 显式模型或带进度时走按模型的入口。
+        if not explicit and progress is None:
+            return _download_model_file(name, dest)
+        return _download_model_file_for(model, name, dest, progress)
+
     onnx = model_dir / "model.onnx"
     tokjson = model_dir / "tokenizer.json"
     sha_file = model_dir / "model.sha256"
@@ -497,7 +537,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
             "resumable)..."
         )
         for name in need:
-            if not _download_model_file(name, model_dir / name):
+            if not _fetch(name, model_dir / name):
                 _reject(
                     f"{model.name}: download failed for {name} (network cut or "
                     "offline; any partial file is kept for resume)"
@@ -508,7 +548,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
         # 不致命"：列为必需项的话，任何仓库里该文件缺失都会让本来能用的重排整体失效，
         # 那比它要修的 bug 更糟。
         if "vocab.txt" in selected and not (model_dir / "vocab.txt").exists():
-            _download_model_file("vocab.txt", model_dir / "vocab.txt")
+            _fetch("vocab.txt", model_dir / "vocab.txt")
         if onnx.stat().st_size < max(model.min_bytes, MIN_MODEL_BYTES):
             logger.warning("downloaded model.onnx is too small; rejecting")
             _reject(f"{model.name}'s model.onnx is smaller than its sanity floor")
@@ -519,7 +559,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
             logger.warning("model.onnx does not match the publisher sha256; "
                            "discarding and retrying once")
             onnx.unlink(missing_ok=True)
-            if not _download_model_file("model.onnx", onnx) or _sha256(onnx) != pub:
+            if not _fetch("model.onnx", onnx) or _sha256(onnx) != pub:
                 logger.warning("model.onnx still does not match the publisher digest; "
                                "refusing to score with it")
                 onnx.unlink(missing_ok=True)
@@ -540,7 +580,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
             want = pub or sha_file.read_text().strip()
             if _sha256(onnx) != want:
                 logger.warning("model.onnx hash mismatch; re-downloading")
-                if _download_model_file("model.onnx", onnx):
+                if _fetch("model.onnx", onnx):
                     if pub and _sha256(onnx) != pub:
                         logger.warning("re-downloaded model.onnx still does not match "
                                        "the publisher digest; refusing to use it")
@@ -554,6 +594,118 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
             pass
 
     return onnx, tokjson
+
+
+def fetch_model(
+    name: Optional[str] = None,
+    progress: Optional[Callable[[str, int, int], None]] = None,
+) -> dict:
+    """把一颗注册表里的重排器**同步**下载完整，交回可打印的报告。
+
+    与搜索路径的区别只在等待方式：搜索把加载放进守护线程，短命的 CLI 进程不等
+    279MB 的下载；`dhole models fetch` 是一次性命令，等完再退。续传、逐端点回退、
+    尺寸下限与发布方 sha256 校验全部复用 ``_ensure_model`` —— 这里不另写一套判据。
+
+    成功形状::
+
+        {"model": "bge-zh", "dir": "...", "ok": True, "already_present": False,
+         "verified": "publisher sha256", "files": [{"name": ..., "path": ...,
+         "bytes": ..., "status": "downloaded"|"present"|"failed"|"missing"}],
+         "error": "", "duration_ms": 1234.5}
+
+    未知模型 / 本机架构没有可用文件也交回同一形状，``ok=False``，不抛异常。
+    """
+    started = time.monotonic()
+    requested = (name or active_model().name).strip()
+    model = MODELS.get(requested)
+    if model is None:
+        return {
+            "model": requested, "dir": "", "ok": False, "already_present": False,
+            "verified": "", "files": [],
+            "error": f"unknown reranker model {requested!r}; "
+                     f"known: {', '.join(MODELS)}",
+            "duration_ms": 0.0,
+        }
+
+    selected = paths_for(model)
+    model_dir = paths.models_dir() / model.name
+    expected = [filename for filename in ("model.onnx", "tokenizer.json")
+                if filename in selected]
+    if "vocab.txt" in selected:
+        expected.append("vocab.txt")
+    if not selected:
+        return {
+            "model": model.name, "dir": str(model_dir), "ok": False,
+            "already_present": False, "verified": "", "files": [],
+            "error": f"{model.name} has no ONNX file for CPU architecture "
+                     f"{platform.machine()!r}",
+            "duration_ms": 0.0,
+        }
+
+    downloaded: set[str] = set()
+
+    def _watch(filename: str, done: int, total: int) -> None:
+        downloaded.add(filename)
+        if progress is not None:
+            progress(filename, done, total)
+
+    global _reranker_unavailable_reason
+    _reranker_unavailable_reason = ""
+    ok = _ensure_model(model=model, progress=_watch, model_dir=model_dir) is not None
+    pub = _publisher_digest(model, selected)
+    sha_file = model_dir / "model.sha256"
+    verified = ""
+    failed: set[str] = set()
+    if ok:
+        onnx_path = model_dir / "model.onnx"
+        if pub:
+            if not onnx_path.is_file() or _sha256(onnx_path) != pub:
+                ok = False
+                failed.add("model.onnx")
+                _reranker_unavailable_reason = (
+                    f"{model.name}'s model.onnx failed publisher sha256 verification")
+            else:
+                verified = "publisher sha256"
+        elif sha_file.exists():
+            try:
+                if _sha256(onnx_path) == sha_file.read_text().strip():
+                    verified = "local sha256"
+                else:
+                    ok = False
+                    failed.add("model.onnx")
+                    _reranker_unavailable_reason = (
+                        "model.onnx does not match its recorded sha256")
+            except Exception:
+                pass
+    files = []
+    for filename in expected:
+        path = model_dir / filename
+        exists = path.is_file()
+        if filename in failed:
+            status = "failed"
+        elif filename in downloaded and exists:
+            status = "downloaded"
+        elif exists:
+            status = "present"
+        else:
+            status = "failed" if not ok else "missing"
+        files.append({
+            "name": filename,
+            "path": str(path),
+            "bytes": path.stat().st_size if exists else 0,
+            "status": status,
+        })
+    return {
+        "model": model.name,
+        "dir": str(model_dir),
+        "ok": ok,
+        "already_present": ok and not downloaded,
+        "verified": verified,
+        "files": files,
+        "error": "" if ok else (_reranker_unavailable_reason
+                                or "model download failed"),
+        "duration_ms": round((time.monotonic() - started) * 1000.0, 1),
+    }
 
 
 def _load_reranker() -> Optional[_Reranker]:
@@ -620,6 +772,41 @@ def get_reranker() -> Optional[_Reranker]:
     return _reranker  # type: ignore[return-value]
 
 
+def _load_reranker_off_thread() -> "asyncio.Future":
+    """在一条**守护**线程里跑 `_load_reranker`，交回可 await 的 future。
+
+    不能用 `asyncio.to_thread`：默认执行器的线程会被 `asyncio.run` 的
+    `shutdown_default_executor()` 与解释器退出前的 atexit 等到底。于是一次冷
+    CLI 搜索虽然几秒就打印了结果，进程却要陪着 ~279MB 的下载挂到它下完（实测
+    3m17s）。守护线程在进程退出时直接消失，留下的 `.part` 下次续传；MCP 服务器
+    本来就活到进程结束，行为不变。
+    """
+    loop = asyncio.get_running_loop()
+    future: "asyncio.Future" = loop.create_future()
+
+    def settle(setter, value) -> None:
+        if not future.done():
+            setter(value)
+
+    def runner() -> None:
+        try:
+            value = _load_reranker()
+        except BaseException as exc:  # noqa: BLE001 - 与 to_thread 相同：交给等待方
+            try:
+                loop.call_soon_threadsafe(settle, future.set_exception, exc)
+            except RuntimeError:
+                pass  # 事件循环已关闭：进程正在退出，这个结果没人要
+        else:
+            try:
+                loop.call_soon_threadsafe(settle, future.set_result, value)
+            except RuntimeError:
+                pass
+
+    threading.Thread(target=runner, daemon=True,
+                     name="dhole-reranker-load").start()
+    return future
+
+
 async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
     """竞态安全的异步重排器加载。并发调用方（启动预热 + 首次搜索）经一把锁共享
     **一次**加载；搜索会等待正在进行的预热，而不是与它赛跑（旧的同步 get_reranker()
@@ -648,7 +835,7 @@ async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
             return None  # 此前一次加载**已结束**并失败；本进程内不再重试
         if not download and not await asyncio.to_thread(model_present):
             return None
-        return await asyncio.to_thread(_load_reranker)
+        return await _load_reranker_off_thread()
 
 
 def rerank(query: str, results: list, *, min_relevance: float = 0.0,
@@ -880,10 +1067,11 @@ def missing_model_phrase(st: dict) -> str:
     """
     if st["files_here"] == 0:
         return (f"{st['model']} not downloaded (~{st['approx_mb']}MB, resumable; "
-                "the first neural search fetches it)")
+                "the first neural search starts fetching it in the background and "
+                "answers by consensus while it downloads)")
     return (f"{st['model']} incomplete on disk ({st['files_here']} of {st['files_expected']} "
             f"file(s); a usable model is ~{st['approx_mb']}MB) - not usable, and the "
-            "first neural search re-fetches what is missing")
+            "first neural search re-fetches what is missing in the background")
 
 
 async def prewarm_reranker() -> None:

@@ -223,7 +223,6 @@ def test_attach_sessions_refuse_tab_actions():
 
 
 def test_an_open_that_lands_inside_is_closed_and_refused(monkeypatch):
-    import dhole_mcp.actions as A
     main, made = _rig()
     monkeypatch.setattr("dhole_mcp.browser._landed_url_refused",
                         lambda landed, entry: True)

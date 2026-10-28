@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import pytest
 from dhole_mcp.actions import INTERACTIVE_SELECTOR, MAX_ELEMENT_INDEX, SNAPSHOT_CAP, _CONFIRM_SNIPPET, _validate_actions, build_page_action
@@ -11,6 +13,8 @@ from dhole_mcp.server import MasterFetchServer, ResponseModel, _report_action_ou
 import base64
 from dhole_mcp.actions import MAX_ACTION_SHOT_BYTES
 from dhole_mcp.wire import _wire_result
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================

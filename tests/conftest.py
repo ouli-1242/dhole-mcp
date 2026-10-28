@@ -108,6 +108,21 @@ def _nobody_launches_a_browser(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _route_memory_is_per_test():
+    """Route memory is process-wide by design; a test must not inherit a hint.
+
+    Without this, one test that mocks a successful stealthy fetch leaves the
+    host in the memory and the next test on the same host takes the
+    browser-first lane instead of the ladder it meant to exercise.
+    """
+    from dhole_mcp import route_memory
+
+    route_memory.reset()
+    yield
+    route_memory.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_robots_fetch(monkeypatch):
     """Keep the suite off the network for robots.txt.
 

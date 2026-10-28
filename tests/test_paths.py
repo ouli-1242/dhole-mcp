@@ -7,12 +7,16 @@
 里的模型目录改名）也随之下线：它搬去的目的地名已不再是模型键。**现在一条迁移都不剩。**
 """
 
+
+
 from pathlib import Path
 import os
 
 import pytest
 
 from dhole_mcp import paths
+
+pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture

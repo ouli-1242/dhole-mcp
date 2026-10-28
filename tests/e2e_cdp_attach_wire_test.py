@@ -263,13 +263,13 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                     "force_fetcher": "stealthy",
                 }))
                 n1 = len(site._server.hits)
-                fence_img = _payload(client.call_tool("web_read", {
+                _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/fence-img",
                     "cdp_url": endpoint,
                     "force_fetcher": "stealthy",
                 }))
                 n2 = len(site._server.hits)
-                img_self = _payload(client.call_tool("web_read", {
+                _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/img-self",
                     "cdp_url": endpoint,
                     "force_fetcher": "stealthy",
@@ -279,7 +279,6 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                 client.close()
             hits = site._server.hits
             nav_out = [h for (_p, h) in hits[n0:n1] if "localhost" in h]
-            sub_out = [h for (_p, h) in hits[n1:n2] if "localhost" in h]
             self_paths = [p for (p, _h) in hits[n2:n3]]
             print("\nNAV window:", json.dumps(hits[n0:n1]))
             print("SUB window:", json.dumps(hits[n1:n2]))

@@ -30,21 +30,49 @@ degradation is a supported configuration and is covered by tests.
 ## Tests
 
 ```bash
-pytest                    # default run; e2e tests are deselected, 8 workers
-pytest -n 0               # one process, for debugging a single test
-pytest -m e2e -n 0        # spawns a real dhole.exe subprocess
+pytest                            # default: the smoke layer only, 8 workers (~30s)
+pytest -m "not e2e and not live"  # the full suite (~130s)
+pytest -n 0                       # one process, for debugging a single test
+pytest -m e2e -n 0                # spawns a real dhole.exe subprocess
 pytest tests/test_search.py -q
 ```
 
-The default run is **parallel** (`-n 8` in `addopts`) because the suite is
-7,415 tests whose slowest single case is 16s — there is no hotspot to optimise,
-only volume. Measured on a 32-core/16GB box:
+The default run is the **smoke** layer: the widest guard of each subsystem
+(security, wire, server, actions, search, fetch, parse, cache, paths, config,
+robots) — about 910 tests. The full suite is one flag away.
+
+**Adding a feature must not force a test edit.** That is the rule this suite is
+written to, and the reason a whole class of tests was removed: the ones that
+asserted an *inventory* — "the registry holds exactly 19 knobs", "the tool
+description is byte-identical to `tool_defs_lock.json`", "the manual names every
+wire move", "the CHANGELOG section has today's shape". Those never caught a
+regression; they only demanded a bookkeeping edit on every feature. What is left
+asserts *behaviour*: a URL that must be refused is refused, a response that must
+carry two counts carries them, a warm browser is reused rather than relaunched.
+
+So: assert the invariant, never the count. `len(...) == 13` becomes "the wire
+serves exactly the registered defs"; a description lint derives its list from the
+source constant instead of a hand-copied table. If a test would go red the day
+someone adds a tool, an engine, an extension or a knob, it is the wrong test.
+
+A new test file runs in the default layer if it carries the marker — and runs in
+the full layer either way:
+
+```python
+import pytest
+
+pytestmark = pytest.mark.smoke     # after every import
+```
+
+The suite is parallel (`-n 8` in `addopts`) because there is no hotspot to
+optimise, only volume. Measured on a 32-core/16GB box:
 
 | command | wall clock |
 |---|---|
-| `pytest -n 0` | 617s |
-| `pytest` (default, `-n 8`) | 131s |
-| `pytest -n 16` | 107s |
+| `pytest -n 0` (full) | 617s |
+| `pytest -m "not e2e and not live"` (full) | ~115s |
+| `pytest` (default, smoke) | ~23s |
+| `pytest -n 16` (full) | 107s |
 | `pytest -n 32` | crashes |
 
 **Never use `-n auto`.** xdist resolves `auto` to `cpu_count`, and every worker

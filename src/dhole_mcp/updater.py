@@ -1448,7 +1448,7 @@ def _append_live_probe(checks) -> None:
                        f"via {fetch.get('fetcher_used', '?')}", ""))
 
 
-def doctor() -> int:
+def doctor(json_out: bool = False, pretty: bool = False) -> int:
     """主动体检：诊断半坏的安装并点名修复方法。
 
     ``-v`` 说这台安装**能**做什么。``doctor`` 额外检查安装完整性 —— PATH 上的
@@ -1611,6 +1611,24 @@ def doctor() -> int:
 
     # ── 渲染 ─────────────────────────────────────────────────────────────
     failures = [c for c in checks if c[1] == "fail"]
+    if json_out:
+        import json
+        payload = {
+            "ok": not failures,
+            "failures": len(failures),
+            "checks": [
+                {"label": label, "state": state, "detail": detail, "fix": fix}
+                for label, state, detail, fix in checks
+            ],
+            "capabilities": [
+                {"label": label, "state": state, "ok": bool(ok)}
+                for label, state, ok in capabilities()
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False,
+                         indent=2 if pretty else None,
+                         separators=None if pretty else (",", ":")))
+        return 1 if failures else 0
     head = (ui.err(f"{len(failures)} issue(s) found") if failures
             else ui.ok("all healthy"))
     print(ui.branded(head))

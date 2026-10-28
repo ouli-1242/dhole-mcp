@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import asyncio
 import json
@@ -19,6 +21,8 @@ from dhole_mcp import server as server_mod
 from dhole_mcp.cache import set_cached
 from dhole_mcp.security import SecurityError
 from dhole_mcp.server import _tier_error_text
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================
@@ -290,8 +294,11 @@ class TestTheWireContract:
         _content, structured = _dispatch("sys_state", {})
         row = structured["sessions"][0]
         assert row["session_id"] == "alpha"
+        # `store` 也常在：它回答"这一行在本进程的罐里，还是磁盘上另一个进程留下的"，
+        # 而默认值（""）不携带这个信息，所以它不是可省略的细节。
+        assert row["store"] == "memory"
         # browser_open false / browser_type "" are defaults, so they ride off the wire
-        assert set(row) == {"session_id", "hosts", "cookies", "expires_in_s"}
+        assert set(row) == {"session_id", "store", "hosts", "cookies", "expires_in_s"}
 
     def test_it_is_a_real_tool_with_real_annotations(self):
         import dhole_mcp.server as server_mod

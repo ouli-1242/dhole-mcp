@@ -1033,7 +1033,9 @@ class TestEnginesProbe:
         monkeypatch.setattr(se, "multi_search", fake_multi)
         monkeypatch.setattr(se, "_cooldowns", lambda: dict(cooldowns or {}))
         code = srv._engines_probe(args)
-        return code, capsys.readouterr().out, asked
+        captured = capsys.readouterr()
+        # 用法错误按 CLI 的约定走 stderr；人类摘要仍在 stdout。两条合起来读。
+        return code, captured.out + captured.err, asked
 
     def test_probes_every_default_engine_one_at_a_time(self, monkeypatch, capsys):
         from dhole_mcp.search_engines import DEFAULT_ENGINES

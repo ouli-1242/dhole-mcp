@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import asyncio
 import json
@@ -15,6 +17,8 @@ import ast
 import re
 from pathlib import Path
 from dhole_mcp import env_registry
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================
@@ -662,35 +666,18 @@ def test_w1_3_registry_has_no_duplicate_names():
     assert len(names) == len(set(names))
 
 
-def test_registry_covers_all_14_env_vars():
-    """17.0 大众化一刀切把注册表从 39 收到 11（§3-20：注销的旋钮运行时静默
-    忽略，只有 --doctor 认识它们）；G25 评审为 HTTP 传输加回
-    `DHOLE_HTTP_TOKEN` 到 12，为凭据落盘开关加回 `DHOLE_PERSIST_CREDENTIALS`
-    到 13。
+def test_every_registered_knob_can_explain_itself():
+    """一颗旋钮要能回答三件事：叫什么、什么时候该动它、谁在读它。
 
-    批次 10 加过两颗（`DHOLE_BROWSER_CHANNEL` / `DHOLE_BROWSER_HEADED`）到 15，
-    批次 11 又整对退掉回到 13 —— 这条账留着不是为了纪念，是因为"**什么时候需要
-    人在场**"只有正在做事的那一方知道：写死进机器配置，每次切换都得人跑去命令行，
-    而 17.0 的卖点正是配置面小。能力落在 `web_act(headed=true)` 一扇门上。
-    再删一个必须先改这里 —— 在有人 --doctor 的输出说谎之前先红。
-    加回或新增一个旋钮同理。
-
-    验收刀9-3 加第 14 颗 `DHOLE_SEARCH_ROW_FILTER`（default on）。它为什么必须是
-    一颗旋钮而不是一个决定：这一族丢掉的是**别人家的内容**，判据是形状与词形而不是
-    名单，而形状这种东西会变异 —— 关掉它不需要重新发版，也不需要谁去维护一张表。
-
-    模型档位那次加了第 15 颗 `DHOLE_RERANK_MODEL`：它选的是本机加载哪一份权重，
-    而模型会话是进程级单例 —— 不重启就换档，同一进程会拿两个打分器给检索计分。
-
-    keyed 引擎扩员一次加三颗（`DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` /
-    `DHOLE_FIRECRAWL_API_KEY`）到 18：它们与 tavily/bocha 同一条纪律 —— key 是
-    每账户各自的凭据，落 env 比落 config 文件少一次明文落盘，且不设就永远不花钱。
-    Brave 官方 API 的 token（`DHOLE_BRAVE_API_KEY`）随后到 19。
+    这里**不钉总数**。总数是一本账：每加一颗旋钮都得回来改一次数字，而它从来没
+    拦住过任何事故 —— 真正会出事的是"名字登记了、读的人不存在"，或者"说得出场景、
+    说不出谁读"。那两条下面各钉一遍。
     """
-    assert len(env_registry.ALL) == 19, (
-        f"expected 19 env vars, found {len(env_registry.ALL)}: "
-        f"{sorted(e.name for e in env_registry.ALL)}"
-    )
+    for entry in env_registry.ALL:
+        assert entry.name.startswith("DHOLE_"), entry.name
+        assert entry.summary.strip(), f"{entry.name} 没有 summary，等于没有说明书"
+        assert entry.scenario.strip(), f"{entry.name} 说不出什么时候该动它"
+        assert entry.read_by, f"{entry.name} 没人读 —— 登记了一颗死旋钮"
 
 
 # ─── W1.4 read_at correctness ───────────────────────────────────────────
@@ -781,6 +768,7 @@ def test_read_at_import_matches_plan_a1():
     """
     imports = sorted(e.name for e in env_registry.ALL if e.read_at == "import")
     assert imports == sorted([
+        "DHOLE_BROWSER_IDLE_TIMEOUT",
         "DHOLE_DEFAULT_CONTENT_CHARS",
         "DHOLE_HTTP_TOKEN",
         "DHOLE_PERSIST_CREDENTIALS",

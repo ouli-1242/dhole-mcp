@@ -110,10 +110,11 @@ class TestCrawlPicksUpASelectorAndSchema:
         assert out.pages == []
 
     @pytest.mark.asyncio
-    async def test_an_unknown_or_expired_plan_is_named(self, live_site):
+    async def test_a_plan_this_process_does_not_hold_is_named(self, live_site):
         srv = MasterFetchServer()
         out = await srv.web_crawl(live_site, resume_token="deadbeef:0")
-        assert "unknown or expired" in (out.error or "")
+        # 不是"过期了"：计划只存在创建它的那个进程里，而这一句必须把范围说对。
+        assert "no plan 'deadbeef' is held by this server process" in (out.error or "")
         out = await srv.web_crawl(live_site, resume_token="not-a-cursor")
         assert "resume_token must be" in (out.error or "")
 

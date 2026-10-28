@@ -3,7 +3,7 @@
 永远 $0。绕过反爬抓任意页面，外加网页搜索。
 """
 
-__version__ = "17.3"
+__version__ = "17.5"
 
 # 惰性 import——server 会拖进重依赖（patchright、playwright 等）；其它模块
 # （cache、security）很轻，可以在没有完整依赖链的情况下直接 import 来测试。

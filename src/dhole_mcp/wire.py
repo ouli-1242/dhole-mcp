@@ -188,7 +188,7 @@ _WIRE_OMIT: dict = {
     # （没开浏览器、没有 cookie、没有东西在过期）。`session_id` **不**可省略 ——
     # 一行没有自己的 id，就对任何事情都没有话可说。
     "SessionCensusRow": frozenset({
-        "hosts", "cookies", "expires_in_s", "browser_open",
+        "store", "hosts", "cookies", "expires_in_s", "browser_open",
         "browser_type", "browser_created",
         # R02-029：驻留那一格同理是「大多数行没有」的细节 —— 没钉页时两格都沉默，
         # 钉着时才上线（正控制在 tests/test_a_pinned_page_answers_before_the_fact.py）。

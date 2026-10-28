@@ -6,6 +6,8 @@ _is_cacheable, _agent_hints, _apply_chunking, _is_cloudflare_from_response)
 against real ResponseModel objects. No mocks of the functions themselves.
 """
 
+
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from dhole_mcp import identity
@@ -1011,6 +1013,8 @@ class TestConstants:
 
 from dhole_mcp.browser import check_browser_available, is_browser_available_cached
 import time as _time
+
+pytestmark = pytest.mark.smoke
 
 
 class TestBrowserDepsNonBlocking:

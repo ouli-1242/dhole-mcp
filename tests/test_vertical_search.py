@@ -279,10 +279,13 @@ class TestTheAdapters:
         hits, reports = await search_many(
             ["academic", "news"], "task groups", 2, fetch=fetch)
 
-        by_source = {r.source: r for r in reports}
-        assert by_source["academic"].status == "ok"
-        assert by_source["news"].status == "error"
-        assert "RuntimeError" in by_source["news"].error
+        # `academic` 现在有两个后端（arXiv + Crossref）：回执按后端各一行。
+        # 一个后端倒下不会把同 kind 的另一个也判成失败 —— 这正是这条用例要钉的。
+        by_backend = {(r.source, r.backend): r for r in reports}
+        assert by_backend[("academic", "arxiv")].status == "ok"
+        assert by_backend[("academic", "crossref")].status == "error"
+        assert by_backend[("news", "gdelt")].status == "error"
+        assert "RuntimeError" in by_backend[("news", "gdelt")].error
         assert [h.backend for h in hits] == ["arxiv", "arxiv"]
 
     @pytest.mark.asyncio

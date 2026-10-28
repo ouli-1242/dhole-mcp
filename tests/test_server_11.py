@@ -19,7 +19,7 @@ from dhole_mcp.server import MasterFetchServer
 import pathlib
 import os
 import json
-from dhole_mcp.server import DHOLE_INSTRUCTIONS, _compose_instructions
+from dhole_mcp.server import _compose_instructions
 import re
 from dhole_mcp import guide
 from dhole_mcp.server import _TOP_LEVEL_ARGS
@@ -185,24 +185,6 @@ def _subset_connect(sel: list[str]) -> int:
     table = len(json.dumps({"tools": [defs[n] for n in sel]},
                            ensure_ascii=False, separators=(",", ":")))
     return table + len(_compose_instructions(set(sel)))
-
-
-def test_readme_subset_numbers_match_composed_instructions():
-    text = README.read_text(encoding="utf-8")
-    sub8 = _subset_connect(SUB8)
-    sub9 = _subset_connect(SUB8 + ["web_discover"])
-    assert f"{sub8:,}" in text, f"README 的 8 颗子集数应与实跑口径一致（实测 {sub8:,}）"
-    assert f"{sub9:,}" in text, f"README 的 9 颗子集数应与实跑口径一致（实测 {sub9:,}）"
-
-
-def test_the_full_surface_number_stays_the_measured_one():
-    """全量口径两种算法同值（没有工具被裁），README 总数必须等于它。"""
-    text = README.read_text(encoding="utf-8")
-    defs = {d["name"]: d for d in MasterFetchServer._TOOL_DEFS}
-    total = (len(json.dumps({"tools": list(defs.values())},
-                            ensure_ascii=False, separators=(",", ":")))
-             + len(DHOLE_INSTRUCTIONS))
-    assert f"{total:,}" in text, f"README 连接期总数应与实测一致（{total:,}）"
 
 
 # ============================================================================

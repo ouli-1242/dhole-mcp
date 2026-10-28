@@ -449,6 +449,23 @@ def _browser_cannot_help(result: ResponseModel, url: str) -> bool:
                for mark in _BROWSER_UNAVAILABLE_MARKS)
 
 
+def _escalation_skipped_by_kind(result: ResponseModel, url: str) -> bool:
+    """这一档没跑，是因为 dhole **按类型故意不升**，不是机器起不来。
+
+    `_never_escalate` 把 .pdf / 图片 / 数据文档挡在浏览器档外：渲染会把字节换成
+    一张查看器页，而那不是调用方要的文档。这个"不肯升"与 `_BROWSER_UNAVAILABLE_MARKS`
+    的"升不了"对调用方是同一个答案（别升级），但**原因**不同：对一台能跑浏览器的
+    机器说"浏览器档不可用"是假话，而 2026-10-28 的 PDF 403 现场正是这样 ——
+    `bot_wall` 诊断对了，`next_action` 却把调用方支去 `dhole --doctor` 查一台没坏的
+    浏览器。
+    """
+    if not _never_escalate(result, url):
+        return False
+    path = (result.escalation_path or "").lower()
+    err = (result.error or "").lower()
+    return not any(mark in path or mark in err for mark in _BROWSER_UNAVAILABLE_MARKS)
+
+
 def _tiers_that_ran(result: ResponseModel) -> tuple[bool, bool]:
     """这次调用真跑过哪几档，返回 (http, stealthy)。
 
@@ -486,7 +503,14 @@ def _render_tier_was_spent(result: ResponseModel) -> bool:
     C13 那次换档重试因此烧掉 31.5s 才超时：建议本身就是那条死路。
     """
     _http_ran, stealthy_ran = _tiers_that_ran(result)
-    return stealthy_ran and not _browser_cannot_help(result, result.url)
+    if not stealthy_ran:
+        return False
+    # 故意不升的类型（.pdf / 图片 / 数据文档）在 `_never_escalate` 那里恒为真；
+    # 但 `fetcher_used='stealthy'` 说明这一档确实被 force_fetcher 点名跑过，
+    # 那一份就是它交回来的答案 —— 不能因为类型守卫把它重新说成"没跑"。
+    if _escalation_skipped_by_kind(result, result.url):
+        return True
+    return not _browser_cannot_help(result, result.url)
 
 
 def _auth_wall_step(url: str) -> str:
@@ -993,6 +1017,28 @@ _COLLAPSE_RECOVERY = (
     "while markdown / text / article all re-run the reader that just lost the text, "
     "and a browser hands that reader the same markup")
 
+#: 抽取器给“这一页没有文字”写的占位符（OCR 跑过、什么也没认出来），连同 PDF 抽取
+#: 自己加的信封行（OCR 头、页分隔线、兜底注记）—— 它们都不是文档的正文。
+_PDF_EMPTY_PAGE = re.compile(
+    r"\[\s*no text detected on this page\.?\s*\]"
+    r"|OCR-extracted from scanned PDF[^\n]*"
+    r"|--- Page \d+ ---"
+    r"|OCR fallback used[^\n]*", re.I)
+
+
+def pdf_text_is_absent(content) -> bool:
+    """True when a PDF extraction produced no text of its own.
+
+    Empty-page markers plus the extractor's own envelope lines (OCR header, page
+    separators, the fallback note) are not text to quote. A mixed document (some
+    pages with a text layer, some without) still has text, so this only fires
+    when scaffolding and whitespace are all that came back. ``web_read`` and
+    ``doc_parse`` share this one predicate: the same bytes must not read as a
+    failure on one door and a success on the other.
+    """
+    text = "\n".join(c for c in (content or []) if isinstance(c, str))
+    return not _PDF_EMPTY_PAGE.sub(" ", text).strip(" \t\r\n>-—")
+
 
 def _detect_content_issue(result: ResponseModel) -> str:
     """检测响应里的内容质量问题，返回错误串或 ''。
@@ -1020,7 +1066,7 @@ def _detect_content_issue(result: ResponseModel) -> str:
     # （"pdf_no_text"），不是 JavaScript 渲染问题。此前「大 body、少文字」的启发式
     # 把它误判成 JS 空壳，误导 agent 去修错误的根因。
     if "application/pdf" in (result.content_type or "").lower():
-        if not content_str or "no text detected" in content_str:
+        if pdf_text_is_absent(result.content):
             return "pdf_no_text: scanned/image PDF with no extractable text layer (OCR found nothing)"
         # 有文字层的 PDF：继续往下走，status/error 检查仍然适用。
 
@@ -1680,16 +1726,21 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("page is a login/sign-in wall, not content - do NOT cite it. "
                        + _auth_wall_step(result.url))
     elif err.startswith("bot_wall_detected"):
-        if _browser_cannot_help(result, result.url):
-            _wall_step = ("The browser tier that would render it is unavailable on this "
-                          "machine (the skip is recorded in error/escalation_path), so "
-                          "force_fetcher='stealthy' cannot help this time - switch source "
-                          "or `dhole --doctor` to see why.")
-        elif _render_tier_was_spent(result):
+        if _render_tier_was_spent(result):
             _wall_step = ("the browser tier already rendered this page and the challenge "
                           "is what it got back - there is no tier left to escalate to, "
                           "so another re-fetch is not an untried option. "
                           "Switch source, or ask for a copy that does not gate.")
+        elif _escalation_skipped_by_kind(result, result.url):
+            _wall_step = ("dhole does not send .pdf / image / data-document responses to "
+                          "the browser tier (a render would replace the bytes with a "
+                          "viewer), so there is no stealthy retry on this URL - switch "
+                          "source, or download the file yourself and parse it.")
+        elif _browser_cannot_help(result, result.url):
+            _wall_step = ("The browser tier that would render it is unavailable on this "
+                          "machine (the skip is recorded in error/escalation_path), so "
+                          "force_fetcher='stealthy' cannot help this time - switch source "
+                          "or `dhole --doctor` to see why.")
         else:
             _wall_step = ("Retry once with force_fetcher='stealthy' (renders the "
                           "challenge), otherwise switch source")
@@ -1982,16 +2033,21 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "- no fetcher "
                 "tier can invent them, so a browser retry is wasted here.")
     elif result.status == 403:
-        if _browser_cannot_help(result, result.url):
-            _denied_step = ("A browser render is the usual move and it is not available on "
-                            "this machine right now (see error/`dhole --doctor`), so do not "
-                            "spend a call on force_fetcher='stealthy' - switch source.")
-        elif _render_tier_was_spent(result):
+        if _render_tier_was_spent(result):
             _denied_step = (f"the browser tier already made this request "
                             f"(fetcher_used='{result.fetcher_used}') and the site refused "
                             "it the same way - rendering is not the untried lever here. "
                             "Switch source, or re-call later if the refusal looks "
                             "session-dependent.")
+        elif _escalation_skipped_by_kind(result, result.url):
+            _denied_step = ("dhole does not send .pdf / image / data-document responses "
+                            "to the browser tier (a render would replace the bytes with "
+                            "a viewer), so there is no stealthy retry on this URL - "
+                            "switch source, or download the file yourself and parse it.")
+        elif _browser_cannot_help(result, result.url):
+            _denied_step = ("A browser render is the usual move and it is not available on "
+                            "this machine right now (see error/`dhole --doctor`), so do not "
+                            "spend a call on force_fetcher='stealthy' - switch source.")
         else:
             _denied_step = ("Retry once with force_fetcher='stealthy', otherwise switch "
                             "source")
@@ -2596,11 +2652,18 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     code = ""
     retryable = False
     recover = ""
-    if _chain_ran_ok(result):
+    if _chain_ran_ok(result) and (err or not result.content_ok):
         # R01-028：跑过的链拥有「这次调用成没成」这个问题的答案，而建议里绝不能
         # 出现的一件事是「把同一条链再发一遍」—— 已经标了 ok 的步骤会跑第二遍
         # （一次 fill 会填两次）。`retryable=false` 让这份响应的两只手意见一致，
         # 而不是互相否决。
+        #
+        # 但"链跑完了"只有在**页面判决仍然失败**时才需要这份诊断。content_ok=true
+        # 且没有 error 的一发是干净成功：diagnosis 的合同是"缺席即成功"。从前这里
+        # 不看 content_ok，于是一次成功的登录/截图/上传也带着
+        # `diagnosis.code=no_content`（2026-10-28 第二轮：22 个带 no_content 的
+        # web_act 场景里有 13 个 content_ok=true、error 为空），按 diagnosis 分支的
+        # agent 会把成功读成"页面没有可用正文"。
         _issue = (result.metadata or {}).get("content_issue") or err
         _code = (_issue.split(":")[0].split("_detected")[0] if _issue else "no_content")
         return {"code": _code, "retryable": False,
@@ -2613,19 +2676,27 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     if err:
         code, retryable, recover = classify_error_text(err)
         if code in ("js_shell", "bot_wall"):
-            retryable = (not _never_escalate(result, result.url)
-                         and not _browser_cannot_help(result, result.url))
-            if not retryable:
-                recover = ("the browser tier is unavailable on this machine - switch "
-                           "source (see error / `dhole --doctor`)")
-            elif _render_tier_was_spent(result):
+            if _render_tier_was_spent(result):
                 # 表里那句模板（"retry with force_fetcher='stealthy'"）是**无条件**的：
                 # 它写的是这一族失败的通用杠杆，而这一次那根杠杆已经拉过了。同一个响应
                 # 里 `next_action` 与 `diagnosis.recover_with` 两只手不许互相否决 —— 这
                 # 是 D5 那条法在建议位的形状。retryable 不动：墙会不会撤是站点的事，
                 # 这一次调用能做的事才是这里的事。
+                retryable = True
                 recover = ("the browser tier already rendered this and returned what is "
                            "in `content` - no untried tier is left on this URL")
+            elif _escalation_skipped_by_kind(result, result.url):
+                retryable = False
+                recover = ("dhole does not send .pdf / image / data-document responses "
+                           "to the browser tier (a render would replace the bytes with "
+                           "a viewer) - switch source, or download the file yourself and "
+                           "parse it")
+            elif _browser_cannot_help(result, result.url):
+                retryable = False
+                recover = ("the browser tier is unavailable on this machine - switch "
+                           "source (see error / `dhole --doctor`)")
+            else:
+                retryable = True
         if code == "auth_wall":
             # 表里那句是**没有 URL 可问**的那一条路的作者（`row_diagnosis` 给 feed 的
             # 每一行、批量的每一行，它们手上只有 error 串）。这里手上有 url，就换成按

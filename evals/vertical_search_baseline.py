@@ -279,11 +279,19 @@ def _summarize(results: list[dict], *, mode: str, missing: list[str],
 
 
 def _evaluate_query(q: dict, rows: list[dict], reports: list[dict]) -> list[dict]:
-    by_source = {r["source"]: r for r in reports}
+    from dhole_mcp import search_verticals as sv
+
     out = []
     for exp in (q.get("expect") or q.get("expectations") or []):
         source = exp["source"]
-        report = by_source.get(source) or {"status": "error", "error": "source not run"}
+        # A kind can have several backends (academic = arXiv + Crossref). The
+        # expectations were written against the kind's primary backend, so
+        # judge the primary one and let the extra backend report on its own.
+        candidates = [r for r in reports if r["source"] == source]
+        primary = sv._BACKENDS.get(source)
+        report = (next((r for r in candidates if r["backend"] == primary),
+                       candidates[0] if candidates else None)
+                  or {"status": "error", "error": "source not run"})
         result = _check_expectation(exp, rows, report)
         result["kind"] = ("content" if (exp.get("title_contains") or exp.get("url_prefix"))
                           else "structural")
@@ -321,6 +329,16 @@ def replay(queries: list[dict], fixtures: dict[tuple[str, str], dict]) -> dict:
                 q["sources"], q["query"], q["max_results"], fetch=fetch,
                 timeout=8.0)
             rows, report_rows = _records_to_rows(hits, reports)
+            # A kind may have backends this snapshot never captured (academic
+            # gained Crossref after the corpus was frozen). Their error is "this
+            # corpus does not hold that backend", not "the source is broken", so
+            # they stay out of the offline receipt instead of failing it.
+            frozen_kinds = {kind for (qid, kind) in fixtures if qid == q["id"]}
+            frozen_backends = {sv._BACKENDS[kind] for kind in frozen_kinds
+                               if kind in sv._BACKENDS}
+            rows = [row for row in rows if row["backend"] in frozen_backends]
+            report_rows = [row for row in report_rows
+                           if row["backend"] in frozen_backends]
             for kind in q["sources"]:
                 if (q["id"], kind) not in used:
                     missing.append(f"{q['id']}__{kind}.json")

@@ -483,6 +483,8 @@ _TOOL_SHAPED = re.compile(r"\b(?:smart|web|doc|feed|cred|sys)_[a-z][a-z0-9_]*\b"
 # 撞同一个形状但不是工具名的东西，逐个说明为什么可以留着。
 _SHAPED_BUT_NOT_A_TOOL = {
     "feed_url",     # feed_read 的参数名（§4 施工图里就這麼写）
+    # CLI `--ndjson` 的行类型：一个源抓取失败，不是一颗工具。
+    "feed_error",
     # A1/A2 下线的两颗：指路文案（_REMOVED_TOOL_HINTS）与注入形状名单里的提及
     # 是"门换了"的教法，不是"去调它"的教法。
     "web_screenshot", "web_resolve",

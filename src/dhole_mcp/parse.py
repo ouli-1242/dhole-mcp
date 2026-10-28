@@ -1484,6 +1484,21 @@ def _parse_pdf(file_path: str, pages: str | None = None,
     if not result.content_ok:
         return "", f"PDF extraction failed: {result.error or 'no extractable content'}", {}
 
+    # OCR 跑过而一个字都没认出来：content 里只有占位符
+    # "[No text detected on this page.]"，那不是可引用的正文。web_read 对同一批
+    # 字节日判 pdf_no_text，本地这条腿从前却把它当成功交回、还带 quality_score=0.9
+    # （2026-10-28 真机 p16）—— 两条门对同一份文件必须给出同一份判决。
+    from dhole_mcp.quality import pdf_text_is_absent
+    if pdf_text_is_absent(result.content):
+        return "", (
+            "pdf_no_text: scanned/image PDF with no extractable text layer "
+            "(OCR found nothing)"), {
+            "way_forward": (
+                "OCR ran on this file and read no text, so its pages are images "
+                "rather than text. Re-sending the same file cannot change that; "
+                "read a text-layer copy of the document instead."),
+        }
+
     extras = {
         "table_of_contents": result.table_of_contents or [],
         "metadata": result.metadata or {},

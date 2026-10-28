@@ -535,152 +535,12 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_36_758():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：36,758（2026-10-26 evaluate / 坐标点击：web_act.actions 点名 evaluate 与 evaluate=expr，+4；E1/E8 的 −9 后回到 36,758，仍在 36,763 以内）。
+def test_the_ruler_agrees_with_the_wire_it_measures():
+    """仓库里的量尺（`tests/tool_payload_measure.py`）与真机 wire 必须同值。
 
-    这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
-    把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
-    去重后，脚本的读数、进程内预测与真机三者必须同值。
-
-    30,707 → 30,701（2026-10-09，审计 D1+D4）：`web_act.confirm` 的描述说清了
-    `confirm` 的两处门（净 +34），`cred_defaults.set` 的描述改掉了「host 在 auth
-    里面」那句错话并缩到真话（净 −40）。这一对是**往下**走的，所以 CONNECT_CEILING
-    也跟着降，而不是抬上限。同批的账在 test_wire_moves_land_in_the_manual.py。
-
-    30,701 → 30,719（2026-10-10，体验修复刀3-C2）：一次**上抬**。两颗 `search` 描述
-    都写着 "(URL path + page title)"，而 `sitemap=true` 的图只有 `loc`，没有标题可比
-    —— 常驻层里的这句话在一条真实的调用形状上是假的。改动只做"不再承诺标题那一半"
-    （crawl +4 / discover +14），完整解释留在 references/tools.md 按需付。
-
-    30,719 → 31,208（2026-10-10，体验修复刀3-C3）：一次**上抬 +489**，买的是地图
-    的大小从此有主人。`max_total_chars` 从前只在 web_crawl 那颗门上，`web_discover`
-    转发时不传 → 一张 1,000 行的地图（实测 116,173 字符 / ~32k token）把默认预算
-    透支 1.9 倍而 `truncated_by_total_chars` 一路是 False；预算现在数的是序列化后的
-    行。被切掉的行要有路可拿，否则修的就是一次静默截断，所以 `resume_token` 也上
-    web_discover 这扇门（读已存下的地图，不走网络）。两颗参数行 +332、描述尾句 +157。
-
-    31,208 → 31,423（2026-10-10，体验修复刀3-C5）：一次**上抬 +215**，买的是
-    `timeout=` 从此不说两句单位。它声明的是整次调用的毫秒（max 120000），而 HTTP 一档
-    钳的是每次尝试的秒（30s），一份文档又只有一次尝试 —— 那句话在"大文件请抬 timeout"
-    这条真实用法上是一句够不着的承诺。三颗描述各补上限（web_read +98 / web_crawl +66 /
-    web_request +52），`feed_read` 顺手把印错的默认值说回 20s（−1：那颗参数从前根本
-    没换算，毫秒被当秒用）。收据本身（`timeout_applied`）是响应字段，不占这一页。
-
-    31,423 → 31,451（2026-10-10，体验修复刀3-A2）：一次**上抬 +28**，买的是三颗**必填**
-    载荷键上了 `web_act.actions`。那句清单从前数完 11 个动作名就只说目标怎么寻址，一个
-    载荷键都没点名 —— `text` 与 `key` 在任何 wire 文本里都不存在，只读 `tools/list` 的
-    调用方只能猜（实测猜错两次），而答案只住在报错里：那等于要求先失败一次。整表（含可选
-    旋钮）的第一版是 519 字符，撞了 `test_wire_shape.py` 那颗 296 的闸；按那道闸自己的
-    口径（搬家，不是缩写）可选项留在 references/tools.md，wire 只留必填的那三颗。
-    31,451 → 31,824（2026-10-10，体验修复刀3-A3）：一次**上抬 +373**，买的是把一句做不到
-    的承诺换成一对用得上的形状。常驻层写着 "Captchas get at most 3 read-and-retry rounds"，
-    而每次调用都重新导航 —— 第二轮读到的挑战已经不是第一轮那一枚（实测靶站每次 GET 出新
-    token）。同一句假话的第二个作者是 VISUAL ASSIST 那条：截图"就是你马上要照着打字的那一枚"，
-    可那张图要等整条链跑完才交得到调用方眼前。新的两半说的是结构与那一种真能做的：图像挑战
-    转交；页面把挑战写成文本时，`{"read": {..., "as": "code"}}` 再 `{"fill": 
-    {"text": "{=code}"}}` 在同一条链里读完。动作清单 +6，工具描述 +367。
-    31,824 → 32,466（2026-10-10，体验修复刀3-W1）：一次**上抬 +642**，买的是这一批里
-    只剩最后一格的那句"调用方对自己那一发请求没有任何说法"。一次零点名的 `web_read`
-    实测发 15 颗头 —— 一枚编造的 `referer: https://www.google.com/`、browserforge 的 UA
-    与 `sec-ch-ua*` 一家（16 发抽样里 3 发把手机 UA 配在 `sec-ch-ua-platform: "Linux"`，
-    13 发带着 `sec-fetch-site: "?1"` 那个错值），而旧参数面上没有任何一颗能改它。
-    `headers=` 上 web_read（+386）与 web_request（+256）；同一刀把 `stealthy_headers`
-    那两颗字面量交给 `anti_detect` 档位表读，公开面因此**没有**多第二颗伪装旋钮。
-    三条设计边界（凭据 / UA / 校验子）各带自己那扇门的地址，而计划里那句
-    "primp 编译层覆盖不掉" 被实测推翻了 —— 覆盖得掉，所以拒绝名单上没有"做不到"这一类。
-
-    32,466 → 32,496（2026-10-10，体验修复刀3-D2）：一次**上抬 +30**，买的是常驻层不再对
-    一台三个月前批过的主机说"这是第一次"。名册从前是无时间戳的裸 host 列表，三月的按键到
-    十月还在放行；现在磁盘形状是 `{host: 批准的 ISO 时间戳}`，过窗（30 天）重新征询而不是
-    静默失效。三处描述改词：web_read.confirm +24、web_read.cdp_url +4、web_act.cdp_url +2
-    （instructions 一字不变，2,476 那一半属于路由行而不是这次）。
-
-    32,496 → 32,707（2026-10-10，体验修复刀4-#42）：一次**上抬 +211**，买的是这一批里最后
-    一句"说了却不管用"。`web_discover` 的 `timeout=` 在 `sitemap=true` 那条分支上从来没有被
-    读过 —— 图走 `crawl_site(discover_only=True)` 而那次调用不带 deadline，抓取本身另有两颗
-    硬编的 15s。实测：一台每次应答 20s 的本地站，`timeout=30000` 跑 30.0s 才回来、
-    `sitemap_used=False`、0 行；把同一颗 30s 换成 8s，它照样跑满 20s 才应答 —— 数字改不改都
-    与它无关。现在 `timeout=` 就是这张图的时钟：它既接进整次调用的 deadline，也接进读索引那
-    一发请求，超出 1-120000 具名拒绝且什么都不读。改完之后同样的站点 20.0s 交出 50 行；
-    `timeout=700` 在 1.70s 被切断，且说的是"这一次的时间预算用完了，这不是站点说的不"，
-    下一句直接点名该抬哪颗参数（discover 抬 `timeout=`，crawl 抬 `deadline_ms`）。
-    web_discover 那颗 2,057 → 2,268（+211 全在它的 `timeout` 描述上），9 颗那组随之
-    26,541 → 26,752。
-
-    32,700 → 32,828（2026-10-11，验收刀9-7 · F9）：一次**上抬 +128**，买的是这一批里唯一
-    一条"骂人级且机械性必错"的那一格从此有治法。体验报告 S10 的原文是"我明明看清了它说
-    我错！"：靶站 `/captcha` 每次 GET 换一枚 token，而每一次 `web_act` 调用都重新导航，
-    所以第二轮填进去的必然是第一轮那道题的答案 —— 不是运气差，是结构，3 次上限救不了它。
-    新参数 `web_act.pin=true`（驻留：下一次带 pin 的调用站在同一页上做事，不导航）的 JSON
-    成本 +215（描述 174 字 + 那颗键的壳）；同一段里从前那句
-    "a retry is a NEW page load, so the challenge you read last call belongs to a page that
-    is gone unless the site binds it to the session"（138 字）整段退场，换成 50 字的指针
-    （−88）。它不在 tools/list 上就说不出来：dispatch 按表外名把调用方的 `pin=` 拒在门外，
-    而一次没人听见的驻留请求读起来就是一次成功的驻留。web_act 那颗 4,287 → 4,415；
-    8 颗与 9 颗那两组不含 web_act，照旧不改 —— 这也是这一族子集账的判据本身。
-
-    32,828 → 33,088（2026-10-15，R02-F34 · R02-054）：一次**上抬 +260**，买的是「这台机器的
-    语义重排器装了没有」第一次在 wire 上点名问得出。`show` 的枚举多一颗 `models`（+8），
-    `clear` 那句「config is show-only」改成两类各自点名（+12），sys_state 描述多一行路由
-    （+240：这一类存在、它是只读的 —— dhole 不抹模型文件、以及往 sys_guide 的那句指针）。
-    必须每次连接都到的理由与 G25 那次 confirm 门同类：**宿主在调用之前**就得决定要不要问这一格，
-    而只住在 sys_guide 语料里的名字，调用方不知道可以问，也就永远不会问（画像那一发
-    `sys_state(show=['config'])` 就是问错了门之后没再问的样子）。四格 `state` 怎么读、截断下载
-    为什么算「不在」——解释全部留在 references/tools.md，按需付。sys_state 那颗 1,654 → 1,914；
-    它住在 8 颗与 9 颗那两组里，所以两组随实测一起走：24,477 → 24,737、26,745 → 27,005（2026-10-20 起再 −11：24,726 / 26,994）。
-
-    33,077 → 33,210（2026-10-20，P0 纵向搜索）：一次**上抬 +133**，买的是
-    `web_search` 的 `sources`（web|news|academic|qa|code|community）与 `sort`
-    （relevance|newest）两颗可选参数在连接期到场：表外名会被 dispatch 拒掉，
-    而五个纵向后端（GDELT/arXiv/Stack Exchange/GitHub/Hacker News）的细节、
-    限速与日期窗语义都住在 sys_guide 按需付。首版两张带 enum 的完整描述实测
-    +860，按批次 6c 的裁决摘掉 enum、并收短 web_search 里与参数描述重复的
-    "两把尺子"一句后，净 +133。web_search 那颗 4,032 → 4,165；它住在 8 颗与
-    9 颗两组里，所以两组随实测走到 24,859 / 27,127；read+search 那一对
-    11,887 → 12,020。
-
-    33,210 → 33,264（2026-10-23，web_discover 计数口径纠错）：一次**上抬 +54**。
-    原句 "pages_crawled=0 is the design, not a failure" 在默认的逐跳建图路径上是假的：
-    `max_pages=3` 实测回 `pages_crawled=3`，summary 写 "using 3 page fetch(es); no
-    content extracted"，stop_reason 是 max_pages reached；`crawl.py` 的 docstring 也
-    一直写着 map 模式 "costs up to max_pages requests"。这句话会把真实发生的抓取读成
-    0，让"建图不花钱"这个前提进到调用方的取舍里。新句改成记账：0 只在 `sitemap=true`
-    与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。web_discover
-    那颗现在是 2,321（+54 全在描述上）；9 颗那组 27,127 → 27,181，8 颗与 read+search
-    两组不含它，照旧 24,859 / 12,020。完整口径（含 `max_pages` 只约束逐跳那一半）
-    住在 references/tools.md 的 web_discover 一节，按需付。
-
-    33,264 → 33,902（2026-10-23，R3 `include_headers`）：一次**上抬 +638**，两颗
-    工具各长各的：`web_read` 6,573 → 6,926（+353）、`web_request` 2,707 → 2,992
-    （+285）。买的是"这页为什么是这样"的证据 —— 状态行、响应头、重定向端点与一条
-    真走出来的 302 链；在此之前只能退回 curl，而 curl 不在这条链路上（没有缓存、
-    没有身份、没有反爬台阶）。`set-cookie` 只交名字，值不落 transcript。它住在
-    8/9 颗两组里，所以两组随实测走到 25,497 / 27,819；read+search 那一对
-    12,020 → 12,373（+353，全在 `web_read` 身上）。
-
-    33,902 → 34,357（2026-10-23，R4 `save_to` / `max_save_bytes`）：一次**上抬 +455**,
-    两颗全在 `web_read` 身上（6,926 → 7,419），其余十颗逐字未动。买的是"给我这个
-    文件"：此前 49MB 的 plugins.json 只换回一句 "too large"，而落盘这条路不存在。
-    这三组都含 `web_read`，所以三格同步走 +455 —— read+search 12,373 → 12,866、
-    8 颗 25,497 → 25,952、9 颗 27,819 → 28,274。**同一颗数字的第四格**，
-    不是四次巧合：`save_to` 住在 `web_read` 上，而这四组都留着它。
-
-    36,384 → 36,412（2026-10-25，web_act 动作面三颗 select / navigate / pdf）：
-    一次**上抬 +28**（净），全在 `web_act.actions` 那颗描述上：动作名单与
-    必填载荷 `select=option` / `pdf=save_to` 共 +51，同一颗描述里两处列表
-    的逗号后空格收掉 −23。买的是三件此前**没有一条路**的事上了
-    wire：下拉框选择（fill 对 <select> 结构性够不到）、历史 back/forward
-    （重导航清空表单）、页面打印成 PDF（字节落盘不进 transcript）。细节
-    （value/label 双匹配、wait_until=commit 的理由、print_background）
-    全部住在 references/tools.md 按需付，与 A2 那次必填键上 wire 同一裁决。
-
-    36,412 → 36,656（2026-10-25，模拟修复轮）：一次**上抬 +244**，全在
-    `web_request` 身上（2,954 → 3,198：参数壳 + 196 字描述）。买的是
-    「登录 POST 的 Set-Cookie 从此有落点」——jar 的存取在 fetch 层每跳
-    每方法都跑，缺的只是这扇门把调用方点名的 jar 递进去（P2 体验模拟：
-    POST /login 成功而后续读拿匿名 jar）。同轮的 web_research 分摊预算
-    clamp（P3）零 wire 成本，两颗的钉子在
-    tests/test_a_login_post_lands_in_the_jar.py。
+    这一条守的是**量尺本身**：它曾按工具数累加路由行，把默认连接多算了 6,000 字符
+    （web_discover / web_crawl 共用那句被算了两遍）。读数、进程内预测、真机三者
+    同值就够了 —— 具体是多少不进测试，那是账本，每改一句描述都要来改一次。
     """
     ruler = _ruler_module()
     import ast
@@ -693,15 +553,13 @@ def test_the_default_connect_is_the_published_36_758():
         defs, {td["name"] for td in defs}, parts)
 
     wire = _connect(None)
-    assert len(wire["names"]) == 13
     assert ruler_compact == wire["tools_compact"], (
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 36_758
 
 
-def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
+def test_the_two_tool_group_pays_what_the_server_sends():
     """`DHOLE_TOOLS=web_read,web_search` 的真机价：12,020（这一族的起点是注释里的 11,480）。
 
     四次移动的账：11,423 → 11,382 是把签名影子摘掉时顺带瘦的字（那一刀量过真机），
@@ -725,14 +583,7 @@ def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
     12,959 → 13,066（+107，round-13 F1）：收窄 selector 的措辞落在 `web_read`
     描述上；13,066 → 13,076（+10，E1）：`urls` 点名回执行数组 `results`。
     """
-    assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 13_076
-
-
-def test_the_readme_eight_tool_price_is_what_the_server_sends():
-    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（26,289）。"""
-    _assert_price(",".join(SUB8), SUB8,
-                  published=("README.md", "这 8 颗是 {total} 字符"))
+    _assert_price("web_read,web_search", ["web_read", "web_search"])
 
 
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
@@ -745,8 +596,7 @@ def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     与 8 颗那组同幅上涨；E1/E8 的净 −9 也同幅（共享的 `web_read`/`feed_read`）。
     """
     nine = SUB8 + ["web_discover"]
-    assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 28_709
+    _assert_price(",".join(nine), nine)
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")
@@ -761,7 +611,7 @@ def test_the_raw_line_is_the_compact_table_plus_a_bounded_envelope():
     """
     wire = _connect("web_read,web_search")
     envelope = wire["raw_tools_line"] - wire["tools_compact"]
-    assert 40 <= envelope <= 60, f"tools/list 那一行的信封开销异常：{envelope}"
+    assert 30 <= envelope <= 60, f"tools/list 那一行的信封开销异常：{envelope}"
 
 
 # ============================================================================

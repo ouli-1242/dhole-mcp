@@ -195,7 +195,11 @@ def _robots_mode_label(ignore_robots: bool, verdict) -> str:
 # 集中在一处，`sys_state` 可以一次性清空。
 from dhole_mcp.sessions import (
     clear as clear_cookie_jar, names_for as cookie_names_for,
-    sessions as cookie_jar_census,
+    # 状态面问的是"这台机器上有什么"，不是"这个进程手里有什么"：一个内存模式的
+    # 进程也要看得见、抹得掉另一个进程留在 sessions.db 里的持久会话。
+    sessions_everywhere as cookie_jar_census,
+    uses_disk as cookie_jar_uses_disk,
+    clear_on_disk as clear_cookie_jar_on_disk,
 )
 from dhole_mcp.security import (
     validate_url,
@@ -306,6 +310,7 @@ from dhole_mcp.quality import (  # noqa: F401
 # 17.0 B6 第七刀上半：反爬档位搬进 rungs.py。这八颗都是再导出：抓取的三条路
 # 按名字读 `_session_identity` / `_anti_detect`，tests 也照 `dhole_mcp.server.<名字>`
 # 读这张表 —— 门留在 server，家已经在 rungs。
+from dhole_mcp import route_memory
 from dhole_mcp.rungs import (  # noqa: F401
     ANTI_DETECT_DESC,
     ANTI_DETECT_DESC_SHORT,
@@ -340,7 +345,7 @@ from dhole_mcp.params import (  # noqa: F401
     _coerce_str_list_arg,
     _validate_tool_args,
 )
-from dhole_mcp.audit import _audit_event, _log_tool_call, _result_error
+from dhole_mcp.audit import _audit_event, _log_query, _log_tool_call, _result_error
 from dhole_mcp.extractor import _is_xml_content_type
 from dhole_mcp.wire import (_call_result, _wire_json, _wire_result,
                             _wire_scalar)
@@ -890,12 +895,32 @@ def _iso_from_ts(ts) -> str:
 
 # 空闲浏览器关闭：连续这么多秒没有进行中的 web_read/web_act 后，
 # 热的 Patchright Chrome 会被完全关闭（进程退出，操作系统收回
-# 其全部内存）。下次抓取再重新拉起（冷启动约 2 秒）。17.0 写死 300s
-# （5 分钟）：正在干活的 agent（两次抓取间思考停顿 30-90 秒）让
-# Chrome 保持预热，而后台闲置的 dhole 则真正释放
-# 内存。``DHOLE_BROWSER_IDLE_TIMEOUT`` 已注销（运行时静默忽略）。
-AUTO_SESSION_IDLE_TIMEOUT = 300
+# 其全部内存）。下次抓取再重新拉起（冷启动约 2-5 秒）。
+# 默认 1800s（30 分钟）。17.0 用的是 300s，依据是"两次抓取间的思考停顿
+# 30-90 秒"—— 但真实使用里一次阅读加判断经常超过 5 分钟，于是每次跨过
+# 那条线都要白付一次冷启动；而代价的另一头只是空闲时多占几百 MB。
+# 30 分钟覆盖绝大多数间隔，同时仍在一次咖啡休息内把内存还回去。
+# ``DHOLE_BROWSER_IDLE_TIMEOUT`` 可覆盖：0 = 永久保活，上限一天。
+AUTO_SESSION_IDLE_TIMEOUT = env_registry.read_int(
+    "DHOLE_BROWSER_IDLE_TIMEOUT", 1800, lo=0, hi=86400)
 IDLE_CHECK_INTERVAL = 60  # 多久检查一次空闲会话（秒）
+
+#: 自动会话默认用哪一份持久浏览器 profile。临时目录意味着每次进程重启都从空
+#: cookie 开始 —— "今天登录、明天再抓同一个站点"这件事永远做不到。具名 profile
+#: 落在 ~/.dhole/profiles/<name>/，退出不删，cookie / localStorage / 登录态跨进程
+#: 跨天活着。换一份：cred_defaults(profile="<name>")；要一次性空会话：profile=""。
+DEFAULT_PROFILE_NAME = "default"
+
+
+def _auto_profile_name(explicit: Optional[str], stored: Optional[str]) -> str:
+    """自动会话用哪份浏览器 profile：显式 > 存过的默认身份 > 默认持久档。
+
+    三态而不是 ``or``：``stored == ""`` 是"存了空串"，意思是"我要一次性临时
+    会话"，它必须压过默认值；``stored is None`` 才是"从没存过"。
+    """
+    if explicit is not None:
+        return explicit
+    return DEFAULT_PROFILE_NAME if stored is None else stored
 
 # 调用方不传 max_content_chars 时，一次抓取使用的内容预算。
 # 刻意与 MAX_CONTENT_CHARS 分开：后者是硬上限（500-200000 的钳制）。
@@ -1243,6 +1268,23 @@ def _attach_login_probe_gap(result: ResponseModel, check_login: bool) -> Respons
     return result
 
 
+def _remember_route(url: str, result: ResponseModel) -> None:
+    """一次成功的自动抓取说明了这个 host 需要哪一档。
+
+    只记成功：失败的回执行不提供"下次先试哪一档"的答案，交给完整阶梯重新学。
+    ``fetcher_used`` 是这条事实的唯一作者（"http" / "stealthy"），这里只读它。
+    """
+    if not result or not result.status or not (0 < result.status < 400):
+        return
+    if result.error:
+        return
+    used = result.fetcher_used or ""
+    if "stealthy" in used or "browser" in used:
+        route_memory.remember(url, "stealthy")
+    elif "http" in used:
+        route_memory.remember(url, "http")
+
+
 def _wayback_capture_index_body(body: str) -> bool:
     """R02-002：这一份快照体其实是 Wayback 的 **capture 索引页**（不是存档正文）。
 
@@ -1461,7 +1503,8 @@ async def _wait_for_the_sibling_fetch(flight: _InFlight, timeout_ms) -> float:
     return now() - started
 
 
-def _pagination_basis(focus_q: Optional[str], page_chars: int, kept_chars: int) -> dict:
+def _pagination_basis(focus_q: Optional[str], page_chars: int, kept_chars: int,
+                      header_chars: int = 0) -> dict:
     """分页那三个数描述的是**哪一路**文字 —— 一句话，一处作者。
 
     存在的理由是一条量过的事实：同一个 URL、同一页正文，`total_extracted_chars` 随 focus
@@ -1470,17 +1513,26 @@ def _pagination_basis(focus_q: Optional[str], page_chars: int, kept_chars: int) 
     于是 `[No more content.]` 骗过两次：换一个 focus 词，第 3 页可以是最后一页，也可以是
     中间一页，而两种情况的修法相反（前者该停，后者该回到 offset=0 重翻）。
 
+    `header_chars` 是 focus 头部的长度（`focus._focus_header` 产出）。头部是说明，
+    不是页面正文；`total_extracted_chars` 与偏移都包含它（偏移不能动），但把
+    "过滤后正文"与"整页长度"比较时必须先把它扣掉，否则小页面会出现
+    "474 of 387 chars" 这种过滤后比整页还长的算术不可能（2026-10-28 实测）。
+
     focus 没上、或上了而一个字没删时回空 dict：那时这一路就是全文，一句"这些数描述全文"
     与它的缺席说的是同一件事，而绝大多数调用是这一种（默认值也会被压实机制删掉）。
     """
-    if not focus_q or kept_chars == page_chars:
+    body_chars = max(0, kept_chars - max(0, header_chars))
+    if not focus_q or body_chars == page_chars:
         return {}
+    header_note = (
+        f" (the {header_chars:,}-char focus header is not page content)"
+        if header_chars else "")
     return {
         "pagination_stream": "focused",
         "page_total_chars": page_chars,
         "pagination_basis": (
-            f"pagination counts the focus-filtered text: {kept_chars:,} of "
-            f"{page_chars:,} chars this page holds. Change focus= and these offsets "
+            f"pagination counts the focus-filtered body: {body_chars:,} of "
+            f"{page_chars:,} page chars{header_note}. Change focus= and these offsets "
             f"move - re-read from offset=0 (or drop focus=) for the whole page"),
     }
 
@@ -1571,7 +1623,11 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
             "focus_selection": str(focus_stats.get("selection") or ""),
         }
     total_len = len(full_text)
-    pagination = _pagination_basis(focus_q, page_chars, total_len)
+    # focus 头部是说明不是正文；把它从"过滤后正文"里扣掉再与整页比较
+    # （`_pagination_basis` 的 docstring 记着 474>387 的现场）。偏移仍按
+    # `full_text` 算，所以 total_len 原样使用。
+    header_chars = int(focus_stats.get("header_chars") or 0) if focus_stats else 0
+    pagination = _pagination_basis(focus_q, page_chars, total_len, header_chars)
 
     if offset >= total_len:
         # 走进这一支的其实是两种情况。一页**本来有**正文、分页翻到底的情形配得上
@@ -2159,7 +2215,9 @@ def _neural_focus_remedy(subject: str = "call") -> str:
         "The reranker model is not downloaded yet. A plain web_search brings it "
         "down on its first run (one-time, resumable) - web_search already ranks "
         "with this model under its default `mode`, so name nothing there, and it "
-        "has no `focus_engine` of its own. To finish this "
+        "has no `focus_engine` of its own. That first search starts the download "
+        "in the background and answers by consensus while it finishes; a later "
+        "search uses the model. To finish this "
         + subject + " without the model, pass `focus_engine='bm25'` for "
         "keyword-overlap focus. No request was made for this " + subject + ".")
 
@@ -3005,14 +3063,35 @@ def _translate_response_body(
             head = raw_body[:4096].decode(getattr(page, 'encoding', None) or 'utf-8', errors='ignore').lower()
         except Exception:
             head = ''
-        if any(m in head for m in ('sign in', 'log in', 'login', 'password',
-                                   'subscribe', 'paywall', 'access denied', 'authenticate')):
+        page_status = int(getattr(page, 'status', 200) or 200)
+        # 反爬挑战页优先于登录墙：403 + "Just a moment..." 不是"需要密码"，而是
+        # 一面墙。2026-10-28 本地受控靶实测：这条分支从前只在登录/付费墙与
+        # not_a_pdf 之间二选一，于是 403 + cf-challenge 被判成 not_a_pdf
+        # （retryable=false，出路是"检查 URL"），而浏览器档其实能过这面墙。
+        _challenge_markers = (
+            'cf-challenge', 'just a moment', 'cloudflare', 'captcha',
+            'attention required', 'checking your browser',
+            'enable javascript and cookies', 'request blocked', 'access denied')
+        _login_markers = (
+            'sign in', 'log in', 'login', 'password', 'subscribe',
+            'paywall', 'authenticate')
+        if any(m in head for m in _challenge_markers):
+            err = ("bot_wall_detected: URL ends in .pdf but the response is an "
+                   "anti-bot/CAPTCHA challenge page, not the PDF - the bytes never "
+                   "reached the document.")
+        elif any(m in head for m in _login_markers):
             err = ("auth_required: URL ends in .pdf but returned a login/paywall page, "
                    "not the PDF. The content is behind authentication.")
+        elif page_status >= 400:
+            # 站点用状态码说了"拒绝"：这比"URL 不像 PDF"更接近事实。诊断句与
+            # 403 的出路由 quality 的 status 分支生成（含"浏览器档已试过就换源"）。
+            err = (status_error_sentence(page_status)
+                   + " - the URL ends in .pdf but this response is HTML, so it is an "
+                     "error/wall page, not the document.")
         else:
             err = ("not_a_pdf: URL ends in .pdf but the response is HTML, not a PDF "
                    "(possibly a redirect/error page). Try the direct PDF link.")
-        return ResponseModel(status=getattr(page, 'status', 200), content=[],
+        return ResponseModel(status=page_status, content=[],
                              url=page.url, fetcher_used=fetcher_used,
                              duration_ms=duration_ms, content_type=raw_ct,
                              total_size_bytes=total_size, extracted_type="markdown",
@@ -3462,6 +3541,26 @@ async def _safe_imported_prewarm(module_name: str, attr: str, timeout: float = 2
     except BaseException:
         return
     await _safe_prewarm(coro_fn, timeout=timeout)
+
+
+async def _reclaim_cache_best_effort() -> None:
+    """启动时回收过期缓存并收缩文件；失败只记一行，绝不拖累任何调用。
+
+    缓存有 10000 条硬上限，但删行不缩文件：实测 404 条撑到 32 MB 之后，
+    条目清零文件仍停在 32 MB。只读工具不该让磁盘只涨不落。
+    """
+    try:
+        from dhole_mcp import cache as _cache
+        outcome = await _cache.reclaim_cache()
+        if outcome.get("purged") or outcome.get("error"):
+            logger.info(
+                "cache housekeeping: purged=%s %s->%s bytes%s",
+                outcome.get("purged"), outcome.get("before_bytes"),
+                outcome.get("after_bytes"),
+                f" ({outcome['error']})" if outcome.get("error") else "",
+            )
+    except BaseException:
+        pass
 
 
 async def ensure_chromium_async(real_chrome: bool = False):
@@ -4757,9 +4856,10 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_search": _SS_PARAMS | {"query"},
     # 3.2 · 一问一证据包那颗门（提升计划）：参数面刻意只有四颗 —— 读几源、每源
     # 多少字、总预算，编排的本质就这三件事；搜索与抓取的全部语义复用 web_search /
-    # web_read 自己的参数，这里不出现第二份。
+    # web_read 自己的参数，这里不出现第二份。`cross_check` 是第五颗，且只多一份
+    # **派生**报告（不改读什么、读多少）。
     "web_research": frozenset({"query", "max_sources", "per_source_chars",
-                               "timeout"}),
+                               "timeout", "cross_check"}),
     # 提升清单 2：本地缓存的检索面就两颗参数——问什么、要几行。没有 freshness
     # 开关：过期行照样召回但带 is_stale 标注，「读过哪儿」不因 TTL 过期而消失。
     "web_recall": frozenset({"query", "limit"}),
@@ -4852,8 +4952,8 @@ _BROWSER_TOOLS = frozenset({"web_read", "web_act"})
 
 
 def _browser_tier_enabled() -> bool:
-    """DHOLE_TOOLS 裁掉整个浏览器档时，启动预热是纯资源税：浏览器闲置 300s
-    才退、重排模型 ~279MB 常驻，一个用不到它们的进程一分也收不回。凡配置真能
+    """DHOLE_TOOLS 裁掉整个浏览器档时，启动预热是纯资源税：浏览器闲置到
+    超时（默认 1800s）才退、重排模型 ~279MB 常驻，一个用不到它们的进程一分也收不回。凡配置真能
     用到浏览器档的行为不变（逐次升级照旧）。"""
     return bool(_ENABLED_TOOLS & _BROWSER_TOOLS)
 
@@ -5600,7 +5700,7 @@ class MasterFetchServer:
         复用前一个。
 
         空闲超时：AUTO_SESSION_IDLE_TIMEOUT > 0 时，自动会话闲置够那么多秒就关；
-        为 0（默认）时浏览器永久保活，空闲监视器也不会启动。
+        为 0 时浏览器永久保活，空闲监视器也不会启动。默认 1800（见上面那段常量注释）。
 
         ``lock_wait`` 只约束"等创建锁"这一段（秒）。启动预热会在整个浏览器启动期间持有
         那把锁，所以第一个需要 stealthy 档的 fetch 可能排在它后面等上最多 30s —— 早就越过
@@ -5631,8 +5731,7 @@ class MasterFetchServer:
             )
         attr = "_auto_stealthy_id"
         ts_attr = "_auto_stealthy_last_used"
-        want_profile = (profile_name if profile_name is not None
-                        else identity.get("profile"))
+        want_profile = _auto_profile_name(profile_name, identity.get("profile"))
         # 档位里那两颗启动级的开关（画布噪声 / WebRTC 屏蔽）只能在一台浏览器起来
         # 的时候决定，所以"这台热浏览器是按哪一档起来的"必须和 profile 一样进入能否
         # 复用的判据 —— 而且问的是那台浏览器本身，不是这边记的一个数：记的数可以谎，
@@ -5725,7 +5824,7 @@ class MasterFetchServer:
         """服务器启动时把唯一那台 stealthy 浏览器预热好（后台、尽力而为）。
 
         之所以挂在 MCP 启动上：等 agent 第一次需要 stealthy fetch 或截图时浏览器已经热了，
-        省掉那 3-5s 冷启动。17.0 修好后它闲置 300s 就关，下一次 fetch 再重新起。幂等：
+        省掉那 3-5s 冷启动。17.0 修好后它闲置到超时（默认 1800s）就关，下一次 fetch 再重新起。幂等：
         _ensure_auto_session 会复用任何已存在的会话。整个预热仍是尽力而为 —— 第一步是对
         1.1.1.1:443 做一次 TCP 探活，网络不通就直接放弃，让浏览器之后按需懒启动。
 
@@ -6352,6 +6451,12 @@ class MasterFetchServer:
         login through the HTTP tier leaves a jar and no browser, a browser
         session can be open with nothing in the jar (its cookies live in its own
         context). Either half alone is a reason to report the id.
+
+        The jar half is the machine's, not this process's: a persist-mode process
+        may have left live cookies in ``sessions.db`` that this process cannot
+        present. It is still listed (and can be erased) — a census that silently
+        skipped it answered "no such session" about credentials sitting on disk.
+        ``store`` on each row says which store it came from.
         """
         census = cookie_jar_census()
         async with self._sessions_lock:
@@ -6368,6 +6473,7 @@ class MasterFetchServer:
                 alive and hasattr(entry.session, "pin_census")) else {}
             rows.append(SessionCensusRow(
                 session_id=sid,
+                store=info.get("store") or "",
                 hosts=info.get("hosts") or {},
                 cookies=info.get("cookies", 0),
                 expires_in_s=info.get("expires_in_s", 0),
@@ -6504,6 +6610,11 @@ class MasterFetchServer:
                 self._auto_stealthy_id = None
                 self._auto_stealthy_last_used = 0
         dropped = clear_cookie_jar(sid)
+        if not cookie_jar_uses_disk():
+            # 本进程的罐在内存里时，`clear_cookie_jar` 碰不到另一个进程留在
+            # sessions.db 里的那些行 —— 而它们正是调用方点名要抹掉的凭据。
+            # 文件被本进程持有时（uses_disk），上面那句已经删过了，不再重复开库。
+            dropped += clear_cookie_jar_on_disk(sid)
         if entry is not None:
             try:
                 await entry.session.close()
@@ -8447,6 +8558,41 @@ class MasterFetchServer:
                 _report_action_outcomes(result, page_action)
                 return result
 
+            # 3.5 route memory（P2）：这个 host 在本进程里上一次是**浏览器档**成功的，
+            # 就先试那一档，省掉一次注定失败的 HTTP 尝试。它是 advisory：这一发不成立
+            # 就丢掉记录、照原样走下面的完整阶梯；成功则刷新 TTL。只对"页面"生效 ——
+            # 文档/落盘/条件请求/要响应头的那几条路，答案的形状属于 HTTP 档，不能被
+            # 浏览器先答了。
+            if (not force_fetcher and not conditional and not actions
+                    and not _SAVE_TO.get() and not _INCLUDE_HEADERS.get()
+                    and not _is_document_url(url)
+                    and _browser_deps_available()
+                    and route_memory.hint(url) == "stealthy"):
+                remembered = await self._within_call_budget(
+                    self._force_fetch(
+                        url, "stealthy", extraction_type=extraction_type,
+                        css_selector=css_selector,
+                        cache_ttl=cache_ttl,
+                        offset=offset, headless=headless, real_chrome=real_chrome,
+                        proxy=proxy, timeout=timeout,
+                        solve_cloudflare=solve_cloudflare,
+                        block_webrtc=block_webrtc, hide_canvas=hide_canvas,
+                        extra_headers=extra_headers, useragent=useragent,
+                        stealthy_headers=stealthy_headers,
+                        cookies=cookies, max_chars=mc,
+                        check_login=check_login, pin=pin,
+                        disable_resources=not load_everything,
+                    ), url, timeout, "remembered stealthy tier")
+                if (remembered.status and 0 < remembered.status < 400
+                        and not remembered.error
+                        and not _is_js_shell(remembered)):
+                    # 这一发没有走 HTTP 档，"direct:stealthy" 会让人以为走了完整阶梯。
+                    remembered.escalation_path = "stealthy(remembered)"
+                    route_memory.remember(url, "stealthy")
+                    return _attach_login_probe_gap(remembered, check_login)
+                # 站点改版了：丢掉提示，让这一次和下一次都从完整阶梯重新学。
+                route_memory.forget(url)
+
             # 4. 指定 fetcher（调用方显式点的名最大）
             if force_fetcher:
                 return await self._within_call_budget(
@@ -8466,7 +8612,7 @@ class MasterFetchServer:
                     ), url, timeout, f"forced {force_fetcher} tier")
 
             # 5. 其余一切走自动升级（HTTP -> stealthy）
-            return _attach_login_probe_gap(await self._within_call_budget(
+            auto = await self._within_call_budget(
                 self._auto_escalate(
                     url, extraction_type,
                     css_selector=css_selector,
@@ -8479,7 +8625,9 @@ class MasterFetchServer:
                     stealthy_headers=stealthy_headers,
                     useragent=useragent, cookies=cookies, max_chars=mc,
                     conditional=conditional, load_everything=load_everything,
-                ), url, timeout, "fetch tiers"), check_login)
+                ), url, timeout, "fetch tiers")
+            _remember_route(url, auto)
+            return _attach_login_probe_gap(auto, check_login)
         finally:
             # 成功、失败、被取消都要放人：漏掉任何一条，同一个 key 上等着的调用
             # 就会一直等到自己那份预算用完（最坏情况是整批超时）。被取消时
@@ -9921,12 +10069,14 @@ class MasterFetchServer:
         Four stores, one question each. `~/.dhole/cache.db` holds fetched pages and
         search results; the session jar holds the cookies a site set after a login,
         keyed by the `session_id=` you passed (in memory — `~/.dhole/sessions.db`
-        exists only when the operator set DHOLE_PERSIST_CREDENTIALS=1); the engine
-        pool remembers which engines are on cooldown and what each one last yielded
-        (`circuit_breaker.json` and `engine_stats.json`); and the stored identity
-        `cred_defaults` chose — the one class here that a caller CHOSE rather than a
-        site handed us, which is why it is listed redacted and erased without a
-        confirm (same switch decides whether it touches `~/.dhole/identity.db`).
+        exists only when the operator set DHOLE_PERSIST_CREDENTIALS=1, and a
+        memory-mode process still lists and erases the rows in that file even though
+        it cannot present them); the engine pool remembers which engines are on
+        cooldown and what each one last yielded (`circuit_breaker.json` and
+        `engine_stats.json`); and the stored identity `cred_defaults` chose — the one
+        class here that a caller CHOSE rather than a site handed us, which is why it
+        is listed redacted and erased without a confirm (same switch decides whether
+        it touches `~/.dhole/identity.db`).
 
         A session is a credential, so the census reports hosts and cookie NAMES only.
         A value here would land in the transcript, and the point of showing the
@@ -10262,8 +10412,12 @@ class MasterFetchServer:
             message = (f"Reported {', '.join(sorted(report - {self._ERASE_EVERYTHING}))}: "
                        + "; ".join(counts) + ". Nothing erased.")
         elif n:
-            message = (f"{n} session(s) open, holding {sum(r.cookies for r in rows)} "
-                       f"cookie(s); the cache and stored-task counts ride along. "
+            disk_only = sum(1 for r in rows if r.store == "disk")
+            message = (f"{n} session(s) hold credentials, "
+                       f"{sum(r.cookies for r in rows)} cookie(s) in all"
+                       + (f" - {disk_only} of them only in the on-disk jar, which "
+                          "this process can erase but not present" if disk_only else "")
+                       + "; the cache and stored-task counts ride along. "
                        "Nothing erased.")
         else:
             message = ("Nothing is open: no cookie jar, no browser session. "
@@ -10831,6 +10985,7 @@ class MasterFetchServer:
         max_sources: int = 3,
         per_source_chars: int = 4000,
         timeout: int = 120_000,
+        cross_check: bool = False,
     ) -> dict:
         """一次调用交回一份带引用的证据包（提升计划 3.2）。
 
@@ -10839,6 +10994,12 @@ class MasterFetchServer:
         / web_read 自己的机器，这里只负责「串」与引用格式：每条证据带 [n] 与 URL，
         失败的行说明为什么且**从不拖垮整包**。预算按剩余量逐源分摊（先到的源不许
         把后面的源饿死），一个源失败只烧掉它自己那一份。
+
+        ``cross_check=true`` 额外交一份来源一致性报告：query 切成 claim，读回的正文
+        切句归因，按独立可注册域名数给 ``agreement_score``，yes/no 问句的否定、
+        反义与同单位数字冲突判 ``contested``。它是**来源一致性信号，不是事实核查**
+        ——几个独立域名说了相近的话，不等于这件事为真。交叉印证自己出错只写
+        ``cross_check_error``，证据包照常返回。
         """
         q = (query or "").strip()
         if not q:
@@ -10860,18 +11021,24 @@ class MasterFetchServer:
         search = await self.web_search(query=q,
                                        max_results=max(8, max_sources * 2))
         if getattr(search, "error", "") and not search.results:
-            return {
+            payload = {
                 "query": q, "sources": [], "evidence": [], "failed": [],
                 "summary": "the search leg failed, so no source was read",
                 "error": search.error,
                 "next_action": search.next_action or "",
             }
+            if cross_check:
+                from dhole_mcp.corroborate import empty_report
+                payload.update(empty_report(
+                    "the search leg failed, so there was nothing to cross-check"))
+            return payload
         picked = [r for r in search.results if getattr(r, "url", "")][:max_sources]
 
         started = now()
         sources: list[dict] = []
         evidence: list[str] = []
         failed: list[dict] = []
+        blocks: list[tuple[str, str]] = []
         for n, row in enumerate(picked, start=1):
             left_ms = budget_ms - (now() - started) * 1000
             share_ms = int(left_ms / max(1, len(picked) - n + 1))
@@ -10910,9 +11077,10 @@ class MasterFetchServer:
                 "content_ok": bool(page.content_ok),
             })
             evidence.append(f"[{n}] {row.url}\n{text}")
+            blocks.append((row.url, text))
 
         leftover = [r for r in search.results if r not in picked][:5]
-        return {
+        payload = {
             "query": q,
             "sources": sources,
             "evidence": evidence,
@@ -10929,6 +11097,16 @@ class MasterFetchServer:
                      "whole page; web_read a source (urls= batches work) for "
                      "everything it says. more_hits are the search rows not read"),
         }
+        if cross_check:
+            from dhole_mcp.corroborate import cross_check as _cross_check
+            from dhole_mcp.corroborate import empty_report
+            try:
+                payload.update(_cross_check(q, blocks))
+            except Exception as exc:  # noqa: BLE001 - 交叉印证不许拖垮证据包
+                payload.update(empty_report())
+                payload["cross_check_error"] = redact_api_key(
+                    f"{type(exc).__name__}: {str(exc)[:160]}")
+        return payload
 
     async def web_recall(self, query: str = "", limit: int = 8) -> dict:
         """对本地缓存里「这台机器已经读过的页」做检索（提升清单 2）。
@@ -10989,8 +11167,10 @@ class MasterFetchServer:
         site/exclude_sites (domain include/exclude on the final URL),
         location/language/region (geo), page (0-10), freshness
         (day|week|month|year). `sources=` adds the keyless vertical pools
-        (news=GDELT, academic=arXiv, qa=Stack Exchange, code=GitHub repositories,
-        community=Hacker News); their rows carry an empty engines_consensus and a
+        (news=GDELT, academic=arXiv+Crossref, qa=Stack Exchange, code=GitHub
+        repositories, community=Hacker News, package=exact npm/PyPI/crates/Go
+        names, repo=one GitHub repository); their rows carry an empty
+        engines_consensus and a
         per-source receipt in source_detail, and a source may be asked without the
         web pool (engines= is then refused). `sort='newest'` orders rows that state
         a publish day newest-first. Results cached 5min.
@@ -11067,6 +11247,15 @@ class MasterFetchServer:
                              "arguments) and check `dhole --doctor` output — the traceback "
                              "is in the server log."),
             )
+
+        _log_query(
+            query,
+            mode=mode,
+            max_results=max_results,
+            results=len(getattr(result, "results", None) or []),
+            engines=list(getattr(result, "engines_used", None) or []),
+            rerank_model=str(getattr(result, "rerank_model", "") or ""),
+        )
 
         # P0: auto-fetch top results' content when fetch_content=true
         if fetch_content and result.results:
@@ -11249,8 +11438,8 @@ class MasterFetchServer:
                 # 的 R3/R5）：这一处从前自己抄了一句 `Nothing was read.`，而同扇的其余拒绝
                 # 说 `Nothing was fetched.`。
                 _msg = ("invalid_request: resume_token reads a map already held "
-                        "server-side, so there is no second map to walk - sitemap= "
-                        "would decide nothing here. " + _nothing_went_out("web_discover"))
+                        "in this server process, so there is no second map to walk - "
+                        "sitemap= would decide nothing here. " + _nothing_went_out("web_discover"))
                 return _CRM(
                     start_url=url, pages=[], error=_msg,
                     summary=f"invalid request · {_summary_label(_msg)}",
@@ -11280,18 +11469,40 @@ class MasterFetchServer:
                 max_total_chars=max_total_chars,
                 clock_ms=_clock_ms, spent_ms=(now() - _t_map) * 1000)
         if not result.error and result.pages and not _by_content:
-            # P11 阶段1：地图留在服务器侧（1h TTL），回执只发一个短 id ——
+            # P11 阶段1：地图留在**本进程**的内存里（1h TTL），回执只发一个短 id ——
             # 千页任务的参数成本从每轮 ~7.6KB 的 URL 传送带降到 O(1)。
             # 被体积闸砍过一刀的地图已经在 crawl 里整份存下了（连未交出的那些行），
             # 这里再存一次只会把游标指向一个没有尾巴的新计划。
             if not result.plan_id:
                 result.plan_id = plan_store([p.url for p in result.pages])
                 result.next_action = (result.next_action or "").rstrip() + (
-                    f" Plan {result.plan_id} is held here for 1h: "
+                    f" Plan {result.plan_id} is held in this server process for 1h "
+                    "(in memory: a restart or another process cannot resume it): "
                     f"web_crawl(url=..., resume_token='{plan_token(result.plan_id, 0)}')"
                     " fetches it without re-sending URLs (add selector=/schema= to "
                     "project each page); or web_read(urls=[...]) the picks directly.")
         return result
+
+    @staticmethod
+    def _discover_page_body(page: Any) -> str:
+        """一页的正文，去掉 focus 生成的那段头部。
+
+        `_discover_search_fallback` 用 focus='词' 扫完页面后，在 `content` 里找词
+        决定哪些页"carrying the word"。但 focus 头部本身就把查询词写在第一句
+        （`[Focus: 'work'; ...]`），于是**每一个被扫描的页都命中自己的问句**：
+        2026-10-28 第二轮 H9 实测，`search='work'` 的地图补考交回 `/article`，
+        同一条 content 里的头部却写着 "none of the 1 words you named occurs on
+        this page ('work')" —— 顶部 summary 说"1 page carrying the word"。
+
+        头部与正文之间由 focus_content 固定用两个换行分隔；只在第一段确实以
+        `[Focus` 开头时才剥掉，普通页面（没有 focus 头部）逐字不动。
+        """
+        text = " ".join(page.content or [])
+        head, sep, rest = text.partition("\n\n")
+        if sep and head.lstrip().startswith("[Focus"):
+            return rest
+        return text
+
 
     async def _discover_search_fallback(self, result, *, url: str, search: str,
                                         path_include: Optional[List[str]],
@@ -11360,7 +11571,7 @@ class MasterFetchServer:
             timeout=left, deadline_ms=left)
         read = [p for p in scan.pages if not p.error]
         hits = [p for p in read if any(
-            t in " ".join(p.content).lower() or t in (p.title or "").lower()
+            t in self._discover_page_body(p).lower() or t in (p.title or "").lower()
             for t in terms)]
         if hits:
             # 内容行接管地图行：pages_crawled 跟着"交回几行"走，与 crawl 自己那个
@@ -11626,13 +11837,23 @@ class MasterFetchServer:
             # 同一族的另两处（上面 10545 与下面 discover_only 那两支）都带 `invalid_request:`，
             # 只有这一支不带 —— 调用方按前缀分类的分支会把它读成"抓完没结果"而不是"参数被拒"。
             # 这一处也是同一位作者：申报搬到 `next_action` 行首，`error` 只留理由。
+            #
+            # 措辞必须限定在**这一个进程**内。计划只存内存（与凭据同一档信任），
+            # 从前这句写的是 "unknown or expired / plans live 1h server-side"，
+            # 读起来像"服务器上有一份，可能过期了"；实际是"这个进程里根本没有" ——
+            # 重启、第二个进程、另一个 MCP 会话都会让它持有空存储。
             return _CRM(start_url=url, pages=[], error=(
-                f"invalid_request: resume_token: plan {plan_id} is unknown or expired "
-                "(plans live 1h server-side, and the store keeps the 32 most "
-                "recent plans - an older one can be evicted early)."),
+                f"invalid_request: resume_token: no plan '{plan_id}' is held by this "
+                "server process. Plans live in memory, for 1h, in the ONE process "
+                "that created them (the store keeps the 32 most recent ids - an older "
+                "one is evicted early). A token therefore does not survive a restart "
+                "or a second process - and an expired id reads exactly like one this "
+                "process never had."),
                 next_action=(f"{_nothing_went_out('web_crawl')} Re-run web_discover "
-                             "(sitemap=true = one request) and start a fresh plan."),
-                summary="plan expired or unknown")
+                             "in THIS process (sitemap=true = one request) and pass "
+                             "back the token that reply returns; the old id has "
+                             "nothing left to resume."),
+                summary="plan not held by this process")
         offset = max(0, min(offset, len(urls)))
         remaining = urls[offset:]
 
@@ -11992,10 +12213,7 @@ class MasterFetchServer:
     # 与算式对齐：数有两个家，就得有一个测试守着它们同值。
     _TIMEOUT_DESC_HTTP = ("Whole-call budget in ms (default 30000, max 120000); "
                           "one HTTP attempt caps at 30s (see timeout_applied).")
-    _TIMEOUT_DESC_READ = ("Whole-call budget in ms (default 30000; 25000 with actions; "
-                          "max 120000), shared by the HTTP retries; one HTTP attempt caps "
-                          "at 30s (timeout_applied names the figure). On a document URL it "
-                          "is spent on the DOWNLOAD, and a download gets one attempt.")
+    _TIMEOUT_DESC_READ = "Whole-call budget in ms (default 30000; 25000 with actions; max 120000); one HTTP attempt caps at 30s (timeout_applied names the figure). On a document URL it is spent on the DOWNLOAD, and a download gets one attempt."
     # web_crawl 的这颗从来不是"whole-call"：整轮的上司是下面那颗 deadline_ms，而它自己是
     # 每一页的预算。两句话在同一张表里互相矛盾过（"Whole-call" 与 "timeout= is per page"）。
     # 这里不点 `timeout_applied`：爬取的行是 CrawlPage，那颗收据住在 web_read 的行里。
@@ -12031,16 +12249,11 @@ class MasterFetchServer:
     # 上 wire 是 519 字符），而"读了怎么用"是路由级的信息，不能只活在源码注释里。
     # 名单与 `actions._VALID_KEYS`、必填键与 `_validate_actions` 的报错文本，由
     # tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py 对齐。
-    _ACTIONS_DESC = (
-        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: "
-        "click,fill,read,press,hover,drag,wait,scroll,wait_selector,snapshot,"
-        "screenshot,submit,upload,dialog,tab,select,navigate,pdf,evaluate; "
-        "fill=text,press=key,drag=to,upload=files,dialog=answer,select=option,"
-        "pdf=save_to,evaluate=expr.")
+    _ACTIONS_DESC = "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click,fill,read,press,hover,drag,wait,scroll,wait_selector,snapshot,screenshot,submit,upload,dialog,tab,select,navigate,pdf,evaluate; fill=text,press=key,drag=to,upload=files,dialog=answer,select=option,pdf=save_to,evaluate=expr."
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: on a gone/removed page (HTTP 404/410/451 — not on 401/403, which are walls: archive won't hold login-gated content either), content_ok can be true of a dated Wayback snapshot - check source + archived_at. No parameter disables it.\n- Touching the page is web_act, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here: sys_guide(topic='behavior') is the handbook, sys_guide(topic='call') the placement traps.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request (error='robots_disallowed'); ignore_robots=true where you have permission. A gone page (404/410/451, not 401/403) may answer from a dated archive.org snapshot; no parameter disables it - check source + archived_at.\n- Touching the page is web_act. Tiers, knobs and response fields: sys_guide(topic='behavior').",
             "inputSchema": {
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
@@ -12070,11 +12283,11 @@ class MasterFetchServer:
                     "offset": {"type": "integer", "description": "Char offset to resume a truncated page; take it from next_offset."},
                     "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded; pick ranges from table_of_contents."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
-                    "focus": {"type": "string", "description": "Return only blocks matching this query. Applied after the cache, so it does not re-fetch; re-pass the same focus when paginating. Which scorer runs it, and what it costs: focus_engine."},
-                    "focus_mode": {"type": "string", "description": "Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
-                    "focus_engine": {"type": "string", "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model). Per-page cost: sys_guide(topic='behavior')."},
-                    "schema": {"type": "object", "description": "CSS-driven structured extraction instead of markdown: {properties: {...}} (a JSON string is accepted). Which keys are read, first match vs \"type\": \"array\", per-element grouping, the invented-keyword trap and the record ceilings: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
-                    "confirm": {"type": "boolean", "description": "Approval for a sensitive action on this call - today only cdp_url: an attach is refused with cdp_authorization_required unless that host's approval is younger than 30 days, and nothing executes without it. False (default) approves nothing."},
+                    "focus": {"type": "string", "description": "Return only blocks matching this query. Applied after the cache, so it does not re-fetch; re-pass the same focus when paginating."},
+                    "focus_mode": {"type": "string", "description": "'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
+                    "focus_engine": {"type": "string", "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model)."},
+                    "schema": {"type": "object", "description": "CSS-driven structured extraction instead of markdown: {properties: {...}} (a JSON string is accepted). Shapes and traps: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
+                    "confirm": {"type": "boolean", "description": "Approval for a sensitive action on this call - today only cdp_url (an attach is refused unless that host's approval is younger than 30 days). False approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
                     # _TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：
@@ -12082,27 +12295,27 @@ class MasterFetchServer:
                     # sys_guide 语料里（tools.md 已经逐条写了它们）。
                     "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers; values never leave the process."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
-                    "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits."},
-                    "cdp_url": {"type": "string", "description": "Attach the user's Chrome over CDP: rides that profile's logged-in cookies, skips the HTTP tier and public cache; answers say cdp_attached=true. Attach needs confirm=true per host (30 days)."},
+                    "check_login": {"type": "boolean", "description": "DOM+cookie-name verdict on whether this page is logged in (true / false / null = could not tell). Values never leave the browser."},
+                    "cdp_url": {"type": "string", "description": "Attach the user's Chrome over CDP: rides that profile's logged-in cookies, skips the HTTP tier and public cache. Needs confirm=true per host, and that approval is asked again after 30 days."},
                     # W1：调用方点名的头。三族拒绝各带着自己那道门的地址（params.py：
                     # 拒必须具名），而"你的键赢在哪一层之上"这句必须在这一颗描述里 ——
                     # 读不到它的人会以为 `headers=` 就是"这次发出去的全部头"，而实测
                     # 今天默认发 15 颗，一颗都不是你点的。
-                    "headers": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "Your keys win, key by key, over what dhole synthesizes. Refused by name, each with its door: cookie / authorization / proxy-authorization -> cred_defaults, user-agent -> the TLS profile, if-* -> extraction_type='check'. anti_detect='off' sends yours alone; caps: sys_guide(topic='behavior')."},
+                    "headers": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "Your keys win, key by key, over what dhole synthesizes. cookie / authorization / proxy-authorization -> cred_defaults, user-agent -> the TLS profile, if-* -> extraction_type='check'; anti_detect='off' sends yours alone."},
                     "include_links": {"type": "boolean", "description": "Also return outgoing links, classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Per-list cap for include_links (1-100; default 30/20/20); links.total_found and links.is_truncated report what it hid."},
                     "include_media": {"type": "boolean", "description": "Also return up to 20 image URLs found on the page in .media (default false)."},
-                    "include_headers": {"type": "boolean", "description": "Also return this response's status line, headers and redirect endpoints in metadata (default false). Set-Cookie comes back as cookie NAMES only; a redirect chain is walked with HEAD, and the call skips the cache because stored headers describe an earlier fetch."},
+                    "include_headers": {"type": "boolean", "description": "Also return this response's status line, headers and redirect endpoints in metadata. Set-Cookie comes back as NAMES only; skips the cache."},
                     # R4：跑题的两颗（"交字节"而不是"交正文"）。描述里互相点名，因为
                     # 单看一颗会以为另一个是可选装饰 —— 而不会给 save_to 配上限的人,
                     # 会在第一次 300MB 的文件上遇到一个他没读过的地方写的红线。
-                    "save_to": {"type": "string", "description": "Write this response's BYTES to this file instead of extracting text. Parent must exist; an existing file is refused, never overwritten. Returns one receipt line (metadata.saved_to/bytes/sha256); skips cache and extraction. Pairs with max_save_bytes."},
-                    "max_save_bytes": {"type": "integer", "description": "Ceiling for save_to: default 268435456 (256MB), cap 1073741824 (1GB). Over it nothing is written and the size is reported. The 50MB extraction cap does not apply to a save_to download."},
+                    "save_to": {"type": "string", "description": "Write the BYTES to this file instead of extracting text. Parent must exist; an existing file is refused, never overwritten. Pairs with max_save_bytes."},
+                    "max_save_bytes": {"type": "integer", "description": "Ceiling for save_to: default 268435456 (256MB), cap 1073741824 (1GB). Over it nothing is written and the size is reported."},
                     # §5 E-13：一次调用摊平两层。三颗都在场上，缺一条描述就没人会
                     # 想到它们存在 —— 而 agent 的默认做法是发 8 次 web_read。
-                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow; each one's href (its own, a descendant's or an ancestor's <a>) is fetched and nested_fields read there."},
-                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'作品','selector':'.work a','type':'array'}] or {'作品':'.work a'}. 1-12 fields; array = every match. Field rules and the carry-over trap: sys_guide(topic='behavior')."},
-                    "nested_max": {"type": "integer", "description": "How many of this page's unique links to expand (default 8, max 30). Links the cap hid are truncation=nested_budget; duplicates and href-less matches are counted separately."},
+                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow; each one's href is fetched and nested_fields read there."},
+                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'x','selector':'.work a','type':'array'}] or {'x':'.work a'}. 1-12 fields; array = every match."},
+                    "nested_max": {"type": "integer", "description": "How many second-layer pages to follow (default 10, cap 50)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -12112,7 +12325,7 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": "Act on one page - click / fill / press / read / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (only that step; earlier actions in the chain have run): describe exactly what would go, and on the user's yes re-run the same chain. Captchas: at most 3 attempts, then hand off - each call is a fresh page unless pin=true keeps it. The walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline AFTER the chain has run - a step of this chain cannot type what it cannot yet see, so a capture is for a human to read. Text the page holds is what a step CAN answer: {\"read\": {\"selector\": \"css\", \"as\": \"code\"}} then {\"fill\": {\"selector\": \"css\", \"text\": \"{=code}\"}}. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
+            "description": "Act on one page - click / fill / press / read / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' guards a stale index.\n- submit PAUSES without confirm=true (only that step): say what would go, then re-run the chain on the user's yes. Captchas: at most 3 attempts, then hand off.\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: a capture is for a human to read, never for a later step to type: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the same page. Text the page holds is what a step CAN answer: {\"read\": {\"selector\": \"css\", \"as\": \"code\"}} then {\"fill\": {\"selector\": \"css\", \"text\": \"{=code}\"}}. The dict form's options: sys_guide(topic='behavior'); action-key shapes: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {
@@ -12127,7 +12340,7 @@ class MasterFetchServer:
                     "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; an attach needs confirm=true per host (30 days)."},
                     "confirm": {"type": "boolean", "description": "A submit reads it INSIDE the action: {\"submit\": {..., \"confirm\": true}} - a top-level confirm does NOT release it. Top-level it gates the first CDP attach. Only on the user's explicit yes."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values)."},
-                    "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy). Consequences: sys_guide(topic='config', section='Variables by scenario')."},
+                    "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy)."},
                     "pin": {"type": "boolean", "description": "Keep this page for the next call with pin=true on that session: it acts on THIS page, no re-navigation, so the captcha you just read is the one you answer. Needs session_id=."},
                 },
             },
@@ -12142,7 +12355,7 @@ class MasterFetchServer:
             # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支
             # 搬过来的：搬工具不许搬走规矩，所以它们在这里一个字都不能少。
             "name": "web_request",
-            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back what the server answered. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried (an earlier call may already have committed), not cached, not escalated to the browser, never answered from archive.org.\n- A write acts only with confirm=true (the user's explicit yes). HEAD is a probe and needs none.\n- Credentials are not a parameter: cred_defaults stores auth / cookies for that host and this call carries them; identity_applied names what it ran on. Bodies cap at 256KB - this retrieves, it does not upload.\n- There is no anti_detect here on purpose: a write never renders. Check where a URL goes first: web_read follows redirects and reports the landing URL. Answer shape: sys_guide(topic='behavior', section='web_request').",
+            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back the answer. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried, not cached, not escalated to the browser (there is no anti_detect here - a write never renders). A write acts only with confirm=true (the user's yes); HEAD needs none.\n- Credentials are not a parameter: cred_defaults stores them. Bodies cap at 256KB.\nAnswer shape: sys_guide(topic='behavior', section='web_request: one write, sent once').",
             "inputSchema": {
                 "type": "object", "required": ["url", "method"],
                 "properties": {
@@ -12169,7 +12382,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Many pages from one site (docs, wikis, listings) when the URL list is not in hand; exact URLs are web_read(urls=[...])'s job.\n- Caps: max_pages (1-40), max_depth, char budgets, deadline_ms; whichever bites is named.\n- robots.txt honoured per page (refused pages error='robots_disallowed', robots_skipped counts them); ignore_robots=true overrides.\n- Plans: web_discover's plan_id + resume_token= here fetches it without re-sending URLs. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
+            "description": "Many pages from one site (docs, wikis, listings) when the URL list is not in hand; exact URLs are web_read(urls=[...])'s job.\n- Caps: max_pages (1-40), max_depth, char budgets, deadline_ms; whichever bites is named.\n- robots.txt honoured per page (error='robots_disallowed', robots_skipped counts them); ignore_robots=true overrides.\nPoliteness, plans and counters: sys_guide(topic='behavior', section='web_crawl: discovery economics and politeness').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -12200,7 +12413,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_discover",
-            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled counts the map's own fetches: 0 for sitemap=true or a held plan, one per step walked. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, <lastmod> per row), unset walks links at one request per step up to max_pages; 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map ('/docs' is a subtree, not a string prefix); search filters by path + title. A map's SIZE is the site's call: max_total_chars bounds one page of rows and resume_token returns the rows it held back. How to read a map: sys_guide(topic='behavior', section='web_discover').",
+            "description": "A site's URL MAP, no page content - one call answers 'what is on this site' before you choose what to read. pages_crawled counts the map's own fetches (0 for sitemap=true or a held plan). The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- sitemap=true reads the site's own index (one request, <lastmod> per row); unset walks links one request per step; 'auto' tries the index first.\n- max_total_chars bounds one page of rows; resume_token returns the rows it held back.\nScoping and the two prices: sys_guide(topic='behavior', section='web_discover: the map, and what it costs').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -12219,7 +12432,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_search",
-            "description": "Keyless search, all 12 default web engines: baidu,bing,bing_global,duckduckgo,yahoo,brave,sogou,so360,shenma,yandex,seznam,marginalia (pool order = reliability tier: stable mains first, rate-limited/obscure last). Returns ranked URLs + relevance, not page content; never answer from snippets only.\n- fetch_content=true auto-fetches 3; else web_read high fetch_relevance hits with focus=. A URL you already have: web_read it, don't search.\n- sources= adds keyless vertical pools; sort='newest' = stated publish-day order.\n- relevance_score 0-1; fetch_relevance high/med/low: fetch high first. engines_consensus counts index FAMILIES (low = maybe degraded pool; see consensus_basis). Engine matrix + source details: sys_guide(topic='behavior', section='web_search').",
+            "description": "Keyless search across 12 default engines: baidu,bing,bing_global,duckduckgo,yahoo,brave,sogou,so360,shenma,yandex,seznam,marginalia (pool order = reliability tier). Ranked URLs + relevance, never page content: fetch the high fetch_relevance hits with web_read(focus=...), or fetch_content=true to have 3 fetched.\n- A URL you already have: web_read it, don't search. sources= adds keyless vertical pools; sort='newest' is stated publish-day order.\nEngine matrix and consensus: sys_guide(topic='behavior', section='web_search: engines, ranking, dates').",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -12231,7 +12444,7 @@ class MasterFetchServer:
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
                     "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 18 names: the 12 above plus keyed engines that need a key (sys_guide(topic='behavior', section='web_search'))."},
-                    "sources": {"type": "array", "items": {"type": "string"}, "description": "Pools (default ['web']): 'web','news','academic','qa','code','community'. Verticals are keyless; omitting 'web' searches only them and refuses engines=. Their rows never add to engines_consensus."},
+                    "sources": {"type": "array", "items": {"type": "string"}, "description": "Pools (default ['web']): 'web','news','academic','qa','code','community','package','repo'. Keyless; omitting 'web' refuses engines=. 'academic' adds Crossref; 'package' takes an exact npm/PyPI/crates/Go name (keywords belong in 'web'), 'repo' takes owner/repo."},
                     "sort": {"type": "string", "description": "'relevance' (default) or 'newest': newest orders rows with a stated publish day newest-first; undated rows stay after."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
@@ -12252,7 +12465,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_research",
-            "description": "One question, one cited evidence pack: searches, reads the top sources, returns each as [n] + URL + its query-relevant text (focus-filtered, not whole pages). Failed sources say why and never fail the pack. For citing, not exhaustive reading - web_read a source (urls= batches) for all of it; more_hits lists the search rows not read.",
+            "description": "One question, one cited evidence pack: searches, reads the top sources, returns each as [n] + URL + its query-relevant text (focus-filtered, not whole pages). Failed sources say why and never fail the pack. For citing, not exhaustive reading - web_read a source (urls= batches) for all of it; more_hits lists the search rows not read.\n- cross_check=true adds a source-agreement report: the query's claims, whether independent domains support or contradict each other, and agreement_score. A cross-source signal, not a fact-check.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
@@ -12260,6 +12473,7 @@ class MasterFetchServer:
                     "max_sources": {"type": "integer", "description": "Sources to read (1-5, default 3)."},
                     "per_source_chars": {"type": "integer", "description": "Chars per source after focus (500-20000, default 4000)."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (30000-300000, default 120000), split across the sources."},
+                    "cross_check": {"type": "boolean", "description": "Add a source-agreement report (default false): per claim a verdict confirmed|contested|unverified, support/oppose URLs, and agreement_score by independent domain count. A cross-source signal, not a fact-check."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": False, "openWorldHint": True},
@@ -12280,7 +12494,7 @@ class MasterFetchServer:
         },
         {
             "name": "cred_defaults",
-            "description": "The identity later calls should assume: set it once instead of passing it on every call.\n- Seven keys: proxy, profile (the named persistent browser context), cdp (the Chrome endpoint), allow_private, anti_detect (the rung), plus auth and cookies - and those two REQUIRE \"host\" in the same object. A stored credential with no host would ride along to the next site you read.\n- What a call ran on is echoed as identity_applied (names and host scopes only). Values never come back: they leave this process only as request headers to the host they were stored for.\n- A bare call reports the store and changes nothing; unset=[\"proxy\"] forgets one key, sys_state(clear=[\"cred_defaults\"]) the whole store. What the caller passes this time always beats what is stored here.",
+            "description": "The identity later calls should assume: set it once instead of passing it on every call.\n- Keys: proxy, profile (named persistent browser context), cdp (Chrome endpoint), allow_private, anti_detect, plus auth and cookies - and those two REQUIRE \"host\" in the same object, or the credential would ride along to the next site.\n- Values never come back; identity_applied says what a call ran on. A bare call reports the store. unset=[...] forgets one key; sys_state(clear=[\"cred_defaults\"]) the whole store.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -12293,7 +12507,7 @@ class MasterFetchServer:
         },
         {
             "name": "sys_state",
-            "description": "What dhole keeps on this machine, and how to erase a class of it: the fetch cache, session cookies (keyed by session_id=), engine cooldowns, the stored identity default, the CDP attach approvals, the config knobs, and the reranker's model state (read-only).\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential - it would land in the transcript), plus cache state.\n- clear=[\"cache\"] wipes the content cache; one fresh URL is cache_ttl=0 instead.\n- clear=[\"<session id>\"] forgets that session and its browser; clear=[\"sessions\"] needs confirm=true (the loss shows up at your next visit to that site).\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history.\n- clear=[\"cdp:host=<name>\"] / [\"cdp_hosts\"] revoke CDP approvals (confirm=true); show=[\"config\"] lists knob NAMES; values via `dhole config list`.\n- show=[\"models\"]: which cross-encoder this machine has, whether its files are complete, what THIS process tried. Read-only - dhole erases no model files; sys_guide(topic='fields') for the reading.",
+            "description": "What dhole keeps on this machine, and how to erase a class of it: fetch cache, session cookies, engine cooldowns, the stored identity default, CDP approvals, config knobs, model state (read-only).\n- No arguments = the census, erasing nothing: open sessions with hosts and cookie NAMES (a value is a credential), plus cache state.\n- clear=[\"cache\"]; one fresh URL is cache_ttl=0 instead. clear=[\"<session id>\"] forgets that session and its browser; [\"sessions\"] needs confirm=true. [\"engine_state\"], [\"cdp:host=<name>\"] / [\"cdp_hosts\"] (confirm=true).\n- show=[\"config\"] lists knob NAMES; show=[\"models\"] the cross-encoder's state.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -12306,7 +12520,7 @@ class MasterFetchServer:
         },
         {
             "name": "doc_parse",
-            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read - it takes the URL directly.\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used (a wrong guess is recoverable: sys_guide(topic='fields')). .pptx/.odt need no extra install; what a text reader cannot carry (layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
+            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read.\n- .html/.csv are decoded by charset detection, not assumed UTF-8; metadata.encoding names the charset used. .pptx/.odt need no extra install.\n- Relative paths: pass cwd when the host doesn't tell the server the working directory.\nEncoding and what a text reader drops: sys_guide(topic='fields').",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
@@ -12322,7 +12536,7 @@ class MasterFetchServer:
         },
         {
             "name": "feed_read",
-            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. web_read the item url for the whole text.\nReply shape and the unparseable feed: sys_guide(topic='behavior', section='remaining tools').",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- since= polls for what is new. An item's summary is a PREVIEW: past 500 chars it is cut (summary_truncated=true); web_read the url for the whole text.\nReply shape: sys_guide(topic='behavior', section='The remaining tools').",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
@@ -12497,11 +12711,20 @@ class MasterFetchServer:
                 # Warm the single stealthy browser at startup so it's ready before
                 # the agent's first stealthy fetch/screenshot. It stays alive until
                 # the idle monitor closes it after DHOLE_BROWSER_IDLE_TIMEOUT of
-                # inactivity (default 300s), then relaunches on the next fetch.
+                # inactivity (default 300s, 0 = never close), then relaunches on the
+                # next fetch.
                 # Best-effort, runs in the background while the server handles the
                 # initialize handshake.
                 warm = (asyncio.create_task(self._prewarm_stealthy())
                         if _browser_tier_enabled() else None)
+                # 孤儿 profile 清扫：被 kill、崩溃、测试 worker 死掉的进程不会执行
+                # 关闭时的 rmtree，那些目录会一直躺在系统 temp 里（实测一台机器
+                # 64 个、合计 4.5 GB）。放后台线程跑，别挡住 initialize 握手；
+                # 年龄与改名两道闸见 browser.sweep_orphan_profiles。
+                from dhole_mcp import browser as _browser_mod
+                sweep = asyncio.create_task(
+                    asyncio.to_thread(_browser_mod.sweep_orphan_profiles))
+                housekeep = asyncio.create_task(_reclaim_cache_best_effort())
                 warm_reranker = (asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker"))
                     if "web_search" in _ENABLED_TOOLS else None)
@@ -12522,12 +12745,12 @@ class MasterFetchServer:
                     # BaseException) so the process always exits cleanly. A noisy
                     # teardown traceback must never look like a server crash to the
                     # MCP client (which reports it as 'failed to load').
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, sweep, housekeep):
                         try:
                             _t.cancel()
                         except BaseException:
                             pass
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, sweep, housekeep):
                         try:
                             await _t
                         except BaseException:
@@ -12582,6 +12805,10 @@ class MasterFetchServer:
             async def lifespan(app):
                 warm = (asyncio.create_task(self._prewarm_stealthy())
                         if _browser_tier_enabled() else None)
+                from dhole_mcp import browser as _browser_mod
+                sweep = asyncio.create_task(
+                    asyncio.to_thread(_browser_mod.sweep_orphan_profiles))
+                housekeep = asyncio.create_task(_reclaim_cache_best_effort())
                 warm_reranker = (asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker"))
                     if "web_search" in _ENABLED_TOOLS else None)
@@ -12592,12 +12819,12 @@ class MasterFetchServer:
                     async with manager.run():
                         yield
                 finally:
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, sweep, housekeep):
                         try:
                             _t.cancel()
                         except BaseException:
                             pass
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, sweep, housekeep):
                         try:
                             await _t
                         except BaseException:

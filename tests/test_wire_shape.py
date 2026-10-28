@@ -7,12 +7,9 @@
 实测的最大值上，只准往下。任何让某颗工具重新变胖、或让某条描述重新变长的改动，都会
 被它接住。
 
-真正的**总预算**不在这里，在
-`tests/test_wire_moves_land_in_the_manual.py` 的 `CONNECT_CEILING`
-（钉在实测值，只降不升；数字见该文件的账本，本文件只引用它的模块名 ——
-下方守卫的 import 在模块改名/搬家时先红）—— 那一条管整条连接期的账，这两条
-管单颗工具的形状：一颗工具自己
-长胖、总账却被别处的收缩抵消掉时，只有这两条看得见。
+两条只钉"只准变小"：数字是今天实测的最大值，不是目标。连接期的总账不进测试 ——
+它每改一句描述就要来改一次，而它从没拦住过任何事故；量尺与真机同值那条
+（`test_server_3.py`）已经守住了"账算得对"。
 
 失败信息**不许写"太长"**（ce8af44：守卫惩罚的是编辑，不是缺陷）。参数超预算指向
 拆分 —— 一个工具带着这么多旋钮，说明它在做两件事；描述超预算指向搬家 —— 常驻层在替
@@ -47,7 +44,7 @@ PARAM_CAP = 31   # web_read（今天实测最大值，由下方守卫对照）
 # 所以这次抬的是上限，不是判据：**下一个人要往 `web_read` 上再加一颗时，先回答
 # "这是第四种产出，还是第三种产出的一个旋钮"**。答不上来就该拆工具 —— 31 不是新常态，
 # 这一次的账就这些。
-DESC_CAP = 292   # web_act.headed（同上；sys_guide.topic 拆分后降到 285）
+DESC_CAP = 288   # web_act.headed（同上；sys_guide.topic 拆分后降到 285）
 # R3/R4 之后最长的一条仍是它：`web_read.headers` 291、`web_read.schema` 290、
 # `web_read.include_headers` 289 —— 三颗都贴着 292 的下沿，没有一颗推开它。
 
@@ -94,10 +91,3 @@ def test_the_ratchet_sits_on_todays_maximum_not_a_stale_number():
         for td in MasterFetchServer._TOOL_DEFS
         for p in (td.get("inputSchema", {}).get("properties") or {}).values()
     ), "DESC_CAP 不在今天实测最大值上 —— 同上"
-
-
-def test_the_ceiling_reference_is_a_module_name_not_a_number():
-    """总账的活引用走 import 不走数字（F-E-4）：本文件 docstring 曾把 ceiling
-    引作 33,460 —— 账本此后又动了至少 8 次没人扫。模块改名/搬家时这条先红。"""
-    from tests.test_wire_moves_land_in_the_manual import CONNECT_CEILING
-    assert isinstance(CONNECT_CEILING, int) and CONNECT_CEILING > 0

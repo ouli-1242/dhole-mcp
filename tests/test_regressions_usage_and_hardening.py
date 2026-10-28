@@ -396,6 +396,29 @@ class TestACutPageSaysItWasCut:
         assert "(2 rejected" in out.summary, out.summary
 
     @pytest.mark.asyncio
+    async def test_a_scope_that_emptied_the_queue_is_named_in_next_action_too(self):
+        """0 内容 + 作用域筛空：出路必须说作用域，而不是只怪站点。
+
+        2026-10-28 第二轮 H2/K4：`path_include=['/work']` 把 7 个候选全部挡下，
+        summary 说对了，next_action 却是通用的 "site may be unreachable, require
+        JavaScript, or block automated access" —— 把调用方支去修站方。
+        """
+        class _Srv:
+            async def web_read(self, url, **kwargs):
+                html = ('<html><body><a href="/other/a">a</a>'
+                        '<a href="/other/b">b</a></body></html>')
+                return _result(url=url, content=[html], content_type="text/html",
+                               fetcher_used="http", content_ok=False,
+                               page_type="fallback")
+
+        out = await crawl_mod.web_crawl(_Srv(), "https://d.test/", max_pages=5,
+                                          max_depth=1, path_include=["/nowhere"])
+        assert len(out.pages) == 1
+        assert "All crawled pages returned no content" not in out.next_action
+        assert "path_include=['/nowhere']" in out.next_action, out.next_action
+        assert "rejected 2 of the 2 same-domain candidate link(s)" in out.next_action
+
+    @pytest.mark.asyncio
     async def test_a_link_that_repeats_forty_times_is_one_rejection(self):
         """计数要说人话：一条导航链接在页里出现 40 次，被挡下的是**一个候选**，
         不是 40 个。写"40 条被作用域吃掉"的数字没人能拿来决策。"""

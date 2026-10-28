@@ -17,13 +17,17 @@ MCP 2026-07-28 GA 把「无状态核心」定为新时代：请求自带
 「修」成回显 2026-07-28 才是（那等于谎称握手代际支持它没实现的东西）。
 """
 
+
 from __future__ import annotations
+
 
 import json
 
 import pytest
 
 from dhole_mcp.server import MasterFetchServer
+
+pytestmark = pytest.mark.smoke
 
 ACCEPT = {"Accept": "application/json, text/event-stream",
           "Content-Type": "application/json"}
@@ -57,7 +61,9 @@ async def test_the_handshake_era_still_serves_the_full_face():
         async with ClientSession(streams[0], streams[1]) as session:
             await session.initialize()
             listing = await session.list_tools()
-            assert len(listing.tools) == 13, sorted(t.name for t in listing.tools)
+            assert ({t.name for t in listing.tools}
+                    == {d["name"] for d in MasterFetchServer._TOOL_DEFS}), \
+                sorted(t.name for t in listing.tools)
 
 
 # ─── 2026-07-28 无状态代际（真 streamable HTTP ASGI 应用）───────────────
@@ -99,7 +105,7 @@ async def test_the_modern_era_serves_discover_list_and_call_without_a_session():
             tools = [t.get("name") for t in
                      (json.loads(_body_text(r)).get("result") or {}).get("tools")
                      or []]
-            assert len(tools) == 13, tools
+            assert set(tools) == {d["name"] for d in MasterFetchServer._TOOL_DEFS}, tools
 
             r = await client.post(
                 "/mcp",

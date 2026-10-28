@@ -339,7 +339,6 @@ class TestTheFallbackIsWired:
         node, _install_stmt = tries[0]
         assert node.handlers, "install 的 try 没有 except 臂 —— 装不上就是整条调用炸掉"
         arm = node.handlers[0]
-        dumped = ast.dump(arm)
         # ① fence 交回 None
         clears = [a for a in arm.body if isinstance(a, ast.Assign)
                   and any(isinstance(t, ast.Name) and t.id == "fence" for t in a.targets)

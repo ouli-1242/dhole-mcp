@@ -327,6 +327,46 @@ async def clear_all_cache(cache_dir: Path | None = None) -> int:
         return cursor.rowcount
 
 
+async def reclaim_cache(
+    cache_dir: Path | None = None, *, vacuum_over_bytes: int = 4 * 1024 * 1024
+) -> dict:
+    """清掉过期条目，并在文件够大时 VACUUM 把空间真正还给文件系统。
+
+    ``clear_cache`` 只删行，SQLite 的页不会跟着缩 —— 实测 404 条撑到 32 MB
+    之后，条目清零文件仍停在 32 MB。一个只读工具不该让磁盘只涨不落，所以
+    启动时跑一次。
+
+    VACUUM 独占整库，所以只在真删掉了东西、且文件超过 ``vacuum_over_bytes``
+    时做；此时若有并发写者，失败是正常的 —— 吞掉并把它写进返回值，不抛。
+
+    返回 ``{"purged", "before_bytes", "after_bytes", "error"}``。
+    """
+    db_path = await _ensure_db(cache_dir)
+    try:
+        before = db_path.stat().st_size
+    except OSError:
+        before = 0
+    purged = 0
+    error = ""
+    try:
+        # isolation_level=None：VACUUM 不能在事务里跑，而 aiosqlite 默认会
+        # 为 DELETE 开一个隐式事务。
+        async with aiosqlite.connect(db_path, isolation_level=None) as db:
+            cursor = await db.execute(
+                "DELETE FROM cache WHERE fetched_at + ttl <= ?", (time.time(),)
+            )
+            purged = max(0, cursor.rowcount or 0)
+            if purged and before > vacuum_over_bytes:
+                await db.execute("VACUUM")
+    except Exception as e:
+        error = str(e)[:200]
+    try:
+        after = db_path.stat().st_size
+    except OSError:
+        after = before
+    return {"purged": purged, "before_bytes": before, "after_bytes": after, "error": error}
+
+
 async def cache_stats(cache_dir: Path | None = None) -> dict:
     """缓存现在装着什么，供 `sys_state(show=["cache"])` 用。
 

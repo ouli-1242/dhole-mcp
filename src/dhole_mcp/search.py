@@ -122,6 +122,54 @@ async def ensure_reranker(*, download: bool = True):
     return await _ensure_reranker(download=download)
 
 
+#: How long one search waits for the local reranker before ranking without it.
+#: A model already on disk loads in ~1-2s; a missing one costs a 278MB download,
+#: and that must never sit inside a tool call: hosts cut calls at 30-120s while the
+#: engine pool's own hard deadline is 16s. Past this wait the download keeps going
+#: in the background (resumable) and a later search uses it.
+RERANK_WARM_WAIT_S = 3.0
+_RERANK_WARM: "tuple[asyncio.AbstractEventLoop, asyncio.Task] | None" = None
+
+
+def _rerank_warm_task() -> asyncio.Task:
+    """The one warm-up this process (and event loop) shares.
+
+    Every search joins the same task, so a download started by one call is not
+    cancelled when that call returns and a second call does not start another.
+    """
+    global _RERANK_WARM
+    loop = asyncio.get_running_loop()
+    if _RERANK_WARM is not None:
+        cached_loop, task = _RERANK_WARM
+        if cached_loop is loop and not task.done():
+            return task
+    task = asyncio.create_task(ensure_reranker())
+    _RERANK_WARM = (loop, task)
+    return task
+
+
+async def _warm_reranker_within_budget(task: asyncio.Task) -> bool:
+    """Wait a bounded slice; ``False`` means still warming (the download continues)."""
+    if task.done():
+        if not task.cancelled():
+            task.exception()  # mark retrieved; ensure_reranker never raises
+        return True
+    try:
+        # shield: a timeout must cancel the WAIT, never the load/download itself.
+        await asyncio.wait_for(asyncio.shield(task), RERANK_WARM_WAIT_S)
+        return True
+    except asyncio.TimeoutError:
+        return False
+    except Exception:
+        return True
+
+
+def _rerank_warming_note() -> str:
+    return ("the local reranker is still being fetched (one-time, resumable); this "
+            "round ranked by cross-engine consensus. A later search uses it once "
+            "the fetch finishes.")
+
+
 SEARCH_CACHE_TTL = 300  # 5 分钟
 DEFAULT_MAX_RESULTS = 6  # 未设置 max_results 时的含义，也是它的回退值
 
@@ -416,7 +464,7 @@ class SearchResult(BaseModel):
                      "invented - it is exactly what the engine handed. Absent = this row "
                      "carries a headline that is not its own address."))
     snippet: str = Field(default="", description="Result snippet from the engine")
-    source: str = Field(default="", description="Backend(s) that returned this result. Web backends are baidu/bing/bing_global/yahoo/brave/duckduckgo/so360/sogou/yandex/marginalia; vertical sources add arxiv/gdelt/stackexchange/github/hackernews when sources= named them. Multiple = more than one backend returned the URL (cross-backend for web, cross-source when a vertical and a web row deduped).")
+    source: str = Field(default="", description="Backend(s) that returned this result. Web backends are baidu/bing/bing_global/yahoo/brave/duckduckgo/so360/sogou/yandex/marginalia; vertical sources add arxiv/crossref/gdelt/stackexchange/github/hackernews/github_repo/npm/pypi/crates/go when sources= named them. Multiple = more than one backend returned the URL (cross-backend for web, cross-source when a vertical and a web row deduped).")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query, NORMALIZED WITHIN THIS ROUND (min-max over the returned set, then boosted by cross-backend consensus). Read it as a seat, not as a verdict: the best row of a set where nothing is relevant is 1.0 by construction, and when every score is identical they all normalize to 1.0. `relevance_raw` is the number that can say 'this one is off-topic'.")
     # S2：badge 的原料必须和 badge 一起端出去。调用方拿着 `fetch_relevance` 只能信或
@@ -523,8 +571,8 @@ class SearchResponseModel(RefusalHandle):
     # 阶梯交的，why 是引擎层已经写好的那句（冷却还剩几秒 / HTTP 几几几 / 被谁取消 /
     # 页面有容器而解析出 0 条）。它们此前只活在这个进程里，从未上过线。
     engine_detail: list[dict] = Field(default=[], description="Per-engine account of THIS round, one row per engine the pool asked: {name, family, status, verdict, why}. `status` is the raw upstream token (ok / empty / blocked / circuit_open / timeout / error:.. / init_error:.. / no_key:.. / preempted); `family` is the index family that engine sits on (bing, bing_global and duckduckgo all share the bing index, so three engines can be one family); `verdict` is the pool's own yield verdict for this round (healthy / blocked / not_asked / parser_drift / parser_suspect / upstream_empty / unknown_empty / timeout / unreachable / not_instrumented / stale); `why` names the concrete reason for THAT row this round - the seconds left on a cooldown, the HTTP code that ate the page, the 8 result containers that parsed into 0 usable rows. The four bucket lists (engines_used / engine_blocked / engine_empty / engine_preempted) stay the vocabulary for WHO; this says WHY, because blocked / cancelled / region-gated / parser-broken have mutually exclusive fixes.")
-    sources_used: list[str] = Field(default=[], description="Vertical backends that returned at least one candidate row this round: arxiv | gdelt | stackexchange | github | hackernews. A backend listed here may still have delivered 0 rows to `results` - read `delivered` in source_detail for that. Empty = no vertical source was asked, or every one of them returned nothing. These are NOT web index families and never contribute to engines_consensus.")
-    source_detail: list[dict] = Field(default=[], description="One row per vertical source this call asked, whether it answered or not: {source, backend, status, count, delivered, duration_ms, error?}. source is the kind you named (news|academic|qa|code|community), backend is the concrete API (gdelt|arxiv|stackexchange|github|hackernews), status is ok|empty|blocked|timeout|error. `count` is candidate rows left AFTER the site/exact-date filters (before the max_results cap); `delivered` is how many of them are in this response's `results`. A source that returned nothing still has a row here - 'I asked and it was empty' must not look like 'I never asked'.")
+    sources_used: list[str] = Field(default=[], description="Vertical backends that returned at least one candidate row this round: arxiv | crossref | gdelt | stackexchange | github | github_repo | hackernews | npm | pypi | crates | go. A backend listed here may still have delivered 0 rows to `results` - read `delivered` in source_detail for that. Empty = no vertical source was asked, or every one of them returned nothing. These are NOT web index families and never contribute to engines_consensus.")
+    source_detail: list[dict] = Field(default=[], description="One row per vertical source this call asked, whether it answered or not: {source, backend, status, count, delivered, duration_ms, error?}. source is the kind you named (news|academic|qa|code|community|package|repo), backend is the concrete API (gdelt|arxiv|crossref|stackexchange|github|github_repo|hackernews|npm|pypi|crates|go), status is ok|empty|not_found|bad_query|blocked|timeout|error. `count` is candidate rows left AFTER the site/exact-date filters (before the max_results cap); `delivered` is how many of them are in this response's `results`. A source that returned nothing still has a row here - 'I asked and it was empty' must not look like 'I never asked'.")
     sort_applied: str = Field(default="", description="relevance|newest. Empty = the default relevance order. 'newest' orders rows that state a publish day newest-first; rows with no usable date keep their relative order after every dated row. Read this when the order looks unlike relevance - it is a caller choice, not a ranking change.")
     # 期5.3：`consensus_basis` 那颗 token 从此带得出分母。三个数的出处都是 _family_tally。
     families_answered_of_asked: str = Field(default="", description="How many independent index families ANSWERED over how many were ASKED this round ('2 of 6'; '1 of 6 asked, 4 could answer' when whole families were cancelled before they got the chance - the parenthetical is the row-level consensus denominator, which excludes families that never got to speak). This is the count behind `consensus_basis`: 'degraded_pool' beside '1 of 6' says how thin the round was, instead of leaving 'degraded' to mean anything from one engine on cooldown to the whole pool refusing. A low number here is NOT disagreement between engines; disagreement is what a per-row '1 of N' with N>1 means.")
@@ -2511,9 +2559,9 @@ def _row_url_is_farm_shaped(url: str) -> str:
     labels = _row_host_labels(url)
     if not labels:
         return ""
-    if sum(1 for l in labels if _row_label_is_mixed(l)) >= _ROW_MIXED_LABELS_AT:
+    if sum(1 for label in labels if _row_label_is_mixed(label)) >= _ROW_MIXED_LABELS_AT:
         return f"host '{labels[-2] if len(labels) > 1 else labels[0]}' carries " \
-               f"{sum(1 for l in labels if _row_label_is_mixed(l))} letter+digit labels"
+               f"{sum(1 for label in labels if _row_label_is_mixed(label))} letter+digit labels"
     if _row_label_is_interleaved(labels[0]):
         return f"leftmost host label '{labels[0]}' is a {len(labels[0])}-char " \
                "letter+digit string with digits inside it"
@@ -3271,7 +3319,12 @@ async def web_search(
     # + model_load = 首次搜索约 6-7 秒）。靠 ensure_reranker 的锁保证竞态安全 —— 与
     # 启动预热共享**同一次**加载；下面在重排步骤前 await 它，届时结果已热（通常已经
     # 加载完，是在抓取期间完成的）。
-    _rerank_task = asyncio.create_task(ensure_reranker()) if mode in ("neural", "auto", "find_similar") else None
+    #
+    # 等待有界（RERANK_WARM_WAIT_S）：盘上没有模型时，这条任务是一次 278MB 的下载，
+    # 而旧代码在调用里等它完成 —— 实测冷 home 的首次搜索 200.0s / 206.5s，宿主在
+    # 120s 处就把调用砍成裸超时（2026-10-28 真机）。到期后任务留在后台继续（shield
+    # 不许取消它），本发按共识排序并说明原因。
+    _rerank_task = _rerank_warm_task() if mode in ("neural", "auto", "find_similar") else None
     # 「这一发有没有为那次尝试付过钱」的判据：账本在 `reranker` 手里，这里只在起任务前
     # 读一个数、等完之后再读一次 —— 多了就是这一发做的，没多就是它在引用本进程早前的那笔。
     _rerank_attempts_before = load_attempts()
@@ -3310,10 +3363,9 @@ async def web_search(
         # 用**源页内容**给候选重排（本地版 Exa find-similar：cross-encoder 打
         # （source_content, 候选））。
         if _rerank_task:
-            try:
-                await _rerank_task
-            except Exception:
-                pass
+            _warmed = await _warm_reranker_within_budget(_rerank_task)
+        else:
+            _warmed = True
         _paid_here = load_attempts() > _rerank_attempts_before
         rer = get_reranker()
         if rer is not None and ranked:
@@ -3366,6 +3418,9 @@ async def web_search(
         # 条共用一个 `_hint_with`，不再有"第三份拼接写法"。
         fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list, query=query))
         fetch_hint = (fetch_hint + " | " + sim_note) if fetch_hint else sim_note
+        if not _warmed and rerank_used != "neural":
+            rerank_note = " ".join(x for x in (rerank_note, _rerank_warming_note())
+                                   if x).strip()
         if rerank_note:
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
         if _own_rows:
@@ -3535,10 +3590,9 @@ async def web_search(
             error = f"{error} {_vdead}".strip() if error else _vdead
 
         if _rerank_task:
-            try:
-                await _rerank_task
-            except Exception:
-                pass
+            _warmed = await _warm_reranker_within_budget(_rerank_task)
+        else:
+            _warmed = True
         _paid_here = load_attempts() > _rerank_attempts_before
         _rank_candidates = ranked[:max(2 * max_results, 12 + len(_vertical_hits))]
         _rank_stats: dict = {}
@@ -3546,6 +3600,9 @@ async def web_search(
             query, _rank_candidates, mode, min_relevance=min_relevance,
             min_raw_relevance=min_raw_relevance, stats=_rank_stats,
             attempted_here=_paid_here)
+        if not _warmed and rerank_used != "neural":
+            rerank_note = " ".join(x for x in (rerank_note, _rerank_warming_note())
+                                   if x).strip()
         # 相关度地板直接拒掉了多少候选（G5）。它们不属于 _delivered —— 从未到达
         # _build_results —— 所以没有这个数，下面"所有结果都被丢弃"那一支会看到
         # _dropped_total == 0，响应就会读成"这个查询没有结果"，而这正是 min_relevance

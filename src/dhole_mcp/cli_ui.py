@@ -38,6 +38,52 @@ _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 _color_cache: bool | None = None
 _unicode_cache: bool | None = None
+_color_mode: str | None = None
+
+
+def configure_color(mode: str) -> None:
+    """`--color=auto|always|never` / `--no-color` 的进程级决定。
+
+    显式旗标压过环境变量：``always`` 连 NO_COLOR 也不理，``never`` 连
+    FORCE_COLOR 也不理；``auto`` 回到环境变量 + TTY 的默认判断。
+    """
+    global _color_mode, _color_cache
+    if mode not in ("auto", "always", "never"):
+        raise ValueError(f"unknown color mode: {mode!r}")
+    _color_mode = mode
+    _color_cache = None
+
+
+def extract_color_flags(argv: list[str]) -> tuple[list[str], str]:
+    """摘掉 `--no-color` / `--color MODE` 并立即生效；返回 ``(cleaned, error)``。
+
+    颜色是进程级选择，放在命令前后都应有效。放在这里而不是 ops：轻量入口
+    （`dhole --help` / 补全）也要用它，而那条路径不许 import 服务器。
+    """
+    cleaned: list[str] = []
+    mode: str | None = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--no-color":
+            mode = "never"
+            i += 1
+            continue
+        if arg == "--color" and i + 1 < len(argv):
+            mode = argv[i + 1].strip().lower()
+            i += 2
+            continue
+        if arg.startswith("--color="):
+            mode = arg.split("=", 1)[1].strip().lower()
+            i += 1
+            continue
+        cleaned.append(arg)
+        i += 1
+    if mode in (None, "auto", "always", "never"):
+        if mode is not None:
+            configure_color(mode)
+        return cleaned, ""
+    return cleaned, f"--color must be auto, always or never (got {mode!r})"
 
 
 def _color_ok() -> bool:
@@ -45,11 +91,14 @@ def _color_ok() -> bool:
     global _color_cache
     if _color_cache is not None:
         return _color_cache
-    # NO_COLOR（no-color.org）：任何值都关闭颜色，空串也算。
-    if os.environ.get("NO_COLOR") is not None:
+    if _color_mode == "always":
+        _color_cache = True
+    elif _color_mode == "never":
         _color_cache = False
-        return False
-    if os.environ.get("FORCE_COLOR"):
+    # NO_COLOR（no-color.org）：任何值都关闭颜色，空串也算。
+    elif os.environ.get("NO_COLOR") is not None:
+        _color_cache = False
+    elif os.environ.get("FORCE_COLOR"):
         _color_cache = True
     elif not sys.stdout.isatty():
         _color_cache = False
@@ -94,6 +143,20 @@ def _unicode_ok() -> bool:
     enc = (getattr(sys.stdout, "encoding", "") or "").lower()
     _unicode_cache = "utf" in enc
     return _unicode_cache
+
+
+def utf8_stdio() -> None:
+    """把 stdout 与 stderr 都升到 UTF-8 —— CLI 的四条抓取命令专用。
+
+    正文里的非代码页字符（搜索结果、页面文字）与元数据里的 `·` / `✗` 都会在
+    旧 Windows 代码页下走样甚至抛 UnicodeEncodeError。两个流必须同一套编码，
+    否则同一个进程的两条通道各说各话。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
 
 def _visible(s: str) -> str:

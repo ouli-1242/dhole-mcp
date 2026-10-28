@@ -8,6 +8,8 @@ env 仍然优先，且这一条不可协商：现有安装全部通过 env 块�
 覆盖别人已经做出来的决定。
 """
 
+
+
 import json
 import pathlib
 import re
@@ -15,6 +17,8 @@ import re
 import pytest
 
 from dhole_mcp import env_registry as er
+
+pytestmark = pytest.mark.smoke
 
 SRC = pathlib.Path(er.__file__).resolve().parent
 

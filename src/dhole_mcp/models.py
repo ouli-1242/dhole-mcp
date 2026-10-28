@@ -253,10 +253,11 @@ class SessionCensusRow(BaseModel):
     的登录从不打开浏览器），所以这里可选的是浏览器那一半，不是 id。
     """
     session_id: str = Field(description="The session_id= this call was given (empty = none)")
+    store: str = Field(default="", description="Which jar holds these cookies: `memory` (this process only), `disk` (the shared `~/.dhole/sessions.db`, written by a process running with DHOLE_PERSIST_CREDENTIALS=1), or `memory+disk` when the same id exists in both. Empty = no jar row under this id; only a browser is open, and its cookies live in that browser's own context. A `disk` row can be listed and erased here but NOT presented by a process whose own jar is in memory - a call with this session_id in that process starts empty. `disk` is not a synonym for 'open': the browser (if any) belongs to the process that owns the jar.")
     hosts: Dict[str, List[str]] = Field(default_factory=dict, description="host -> the cookie NAMES the jar holds for it. Names only, always: a cookie value is a credential, and everything a tool returns lands in the transcript.")
     cookies: int = Field(default=0, description="Cookies held under this id. 0 with browser_open true means the browser keeps them in its own context, out of the jar.")
     expires_in_s: int = Field(default=0, description="Seconds until the EARLIEST of this session's cookies lapses by itself (0 = the jar holds nothing). Says whether forgetting it is urgent or already happening on its own.")
-    browser_open: bool = Field(default=False, description="A browser is still running under this id, holding whatever that site set. Closing the jar does not stop it.")
+    browser_open: bool = Field(default=False, description="A browser is still running under this id in THIS process, holding whatever that site set. Closing the jar does not stop it. False does not mean no browser anywhere: another process can own the jar row (`store='disk'`).")
     browser_type: str = Field(default="", description="dynamic|stealthy, empty when browser_open is false")
     browser_created: str = Field(default="", description="ISO timestamp of when the browser session opened")
     pinned_url: str = Field(default="", description="The page a `pin=true` call left in this session's hands, if any. Empty = nothing is pinned. A page someone closed by hand reads as empty too - the answer is 'it is not there'.")
@@ -305,8 +306,8 @@ class SysStateModel(RefusalHandle):
     message: str = Field(default="", description="What this call did, in one line")
     cleared: List[str] = Field(default_factory=list, description="State classes this call actually erased, in the words you passed. Absent means nothing was erased - a paused or refused call says so here too.")
     pending_approval: bool = Field(default=False, description="true = this call erased NOTHING and is waiting for you to repeat it with confirm=true. Absent (false) is not approval: nothing happened yet. Reserved for erasures you would not notice as they happened - losing a site's cookies shows up only at your next visit to that site.")
-    sessions: List[SessionCensusRow] = Field(default_factory=list, description="The census: every id holding a cookie jar or running a browser. Returned by a call with no `clear`, and listed in `error` when a named id does not exist.")
-    open_count: int = Field(default=0, description="How many sessions are open right now (0 = nothing to forget)")
+    sessions: List[SessionCensusRow] = Field(default_factory=list, description="The census: every id holding a cookie jar or running a browser. It covers this process's jar AND the on-disk `sessions.db` a persist-mode process may have left behind (each row's `store` says which) - a memory-mode process can see and erase those credentials even though it cannot present them. Returned by a call with no `clear`, and listed in `error` when a named id does not exist.")
+    open_count: int = Field(default=0, description="How many sessions hold a jar or a browser right now (0 = nothing to forget). Counts a disk row too: it is a credential that can be erased here, even when this process cannot use it.")
     session_id: str = Field(default="", description="The single session this call forgot, empty otherwise.")
     cookies_forgotten: int = Field(default=0, description="Cookies dropped by this call")
     browser_closed: bool = Field(default=False, description="True when this call shut a browser session down")

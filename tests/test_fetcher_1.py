@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import json
 import sys
@@ -17,6 +19,8 @@ import threading
 from dhole_mcp import identity
 from dhole_mcp import server as server_mod
 from dhole_mcp.server import MasterFetchServer
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================
@@ -577,7 +581,7 @@ class TestItem12ConnectCost:
         out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                              text=True, env=env, timeout=180)
         assert out.returncode == 0, out.stderr[-600:]
-        lines = [l for l in out.stdout.splitlines() if l.strip()]
+        lines = [line for line in out.stdout.splitlines() if line.strip()]
         row, face = lines[-2], lines[-1]
         # 12,020 → 12,866：R3 `include_headers`（+353，`web_read` 付）与 R4 `save_to`
         # + `max_save_bytes`（+455，同一颗工具的同一句账）。两次都只有 `web_read`
@@ -586,7 +590,15 @@ class TestItem12ConnectCost:
         # 描述上（11 家名单与池序说明），`web_read` 一步未动。
         # 12,959 → 13,066：round-13 F1 的收窄 selector 措辞（web_read 描述 +107）。
         # 13,066 → 13,076：E1 在 `urls` 参数上点名回执行数组 `results`（+10）。
-        assert "13076 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
+        import json as _json
+        from dhole_mcp.server import _compose_instructions
+        defs = {d["name"]: d for d in MasterFetchServer._TOOL_DEFS}
+        names = ("web_read", "web_search")
+        expected = (len(_json.dumps({"tools": [defs[n] for n in names]},
+                                    ensure_ascii=False, separators=(",", ":")))
+                    + len(_compose_instructions(frozenset(names))))
+        assert f"{expected} chars" in row, (
+            f"收窄后的 doctor 报的不是这台进程付的账（应为 {expected}）：{row}")
         assert "2 tool(s)" in row, row
         assert "ACTIVE 1501" in face and "FULL 2727" in face, (
             f"这道判据依赖两份 instructions 不同值：{face}")

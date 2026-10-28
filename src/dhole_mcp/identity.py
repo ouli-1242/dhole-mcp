@@ -57,6 +57,15 @@ _conn: sqlite3.Connection | None = None
 _PERSIST = env_registry.read_flag("DHOLE_PERSIST_CREDENTIALS", fail_safe=True)
 _file_backed = False
 
+
+def persistence_enabled() -> bool:
+    """这台机器上**实际**能不能落盘：开关打开、并且有加密器（Windows DPAPI）。
+
+    CLI 每条命令都是新进程，需要一个比"环境变量写了 1"更硬的答案 —— 开关打开
+    但没有 DPAPI 时 `_connect` 会降级为内存，把一次写入报成功就是撒谎。
+    """
+    return bool(_PERSIST and secretbox.available())
+
 _CREATE_SQL = (
     "CREATE TABLE IF NOT EXISTS defaults ("
     " key TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '',"
@@ -120,6 +129,13 @@ def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
             legacy.close()
     except Exception as e:
         logger.debug("legacy identity.db unreadable, left in place: %s", e)
+        return
+    if any(secretbox.is_protected(value) for _, _, value, _ in rows):
+        # 加密值不是 legacy：这是另一个进程开着 DHOLE_PERSIST_CREDENTIALS=1 时写的
+        # 库，归它所有。吸收密文再删文件，会让那个进程的默认身份凭空消失。
+        logger.info(
+            "identity.db holds DPAPI-encrypted values - it belongs to a "
+            "persist-mode store, so this process leaves it in place")
         return
     for key, scope, value, updated_at in rows:
         conn.execute(

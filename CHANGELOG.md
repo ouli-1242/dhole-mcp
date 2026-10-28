@@ -6,6 +6,83 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [17.5] - 2026-10-28
+
+CLI 从「只有运维面」补成一扇完整的门：13 条内容命令与 13 颗工具一一对应，不开宿主也能拿内容；同批收入 17.3 之后的浏览器持久 profile、连接期瘦身与磁盘回收。
+
+### 新增
+
+- **CLI 全量内容面**：`dhole read / search / crawl / discover / research / recall / request / act / doc / feed / state / creds / guide` 13 条内容命令与 13 颗工具一一对应，不开 MCP 宿主也能拿内容。stdout 只装内容、stderr 只装元数据，退出码 0=成功且有内容 / 1=抓到了但内容不可用 / 2=用法错误；`--json` 时 stdout 是完整回执（与 MCP 同一份字节；`guide` 是纯散文，整篇包成一个 JSON 字符串）。`request` / `act` 的写操作照旧过工具自己的 `confirm` 与人工同意闸。
+
+- **发现性与补全**：每条命令都有 `--help`（用法、旗标、示例、退出码），`dhole help` 是总览，`dhole commands --json` 给机器读的目录，`dhole completion bash|zsh|fish|powershell` 产出一份补全；未知命令给 did-you-mean 建议；全局旗标放在子命令前后都认。`help` / `commands` / `completion` 不导入服务端模块（实测约 0.15 s，完整命令约 0.6 s），补全与帮助不再付整份依赖的冷启动。
+
+- **`dhole call <tool>` 逃生门**：CLI 还没为某颗参数造旗标时，`--arg NAME=VALUE` 逐颗传、`--args '{"…": …}'` 整包传（值是 JSON 就按 JSON 解析；同名参数两处打架即拒绝）。默认交 JSON，`--text` 把内容通道打到 stdout、元数据留在 stderr。`dhole tools --json` 列出全部工具与参数，`dhole version` 与 `dhole -v` 同一份能力面板。
+
+- **自动化输出面**：`--ndjson` 一行一条结果（read 的每个 URL、search 的每行、crawl 的每页、feed 的每条、state/creds 的每一格；失败行也带 `type`，不会静默少一行）、`--pretty`、`--quiet`、`--verbose`、`--progress`（TTY 上的耗时提示）、`--color=auto|always|never` / `--no-color`；`--urls-file FILE` 或位置参数 `-`（stdin）批量喂 URL。`--json` 下的用法错误也交一份带 `exit_code` 的可解析信封。此前只活在 `--arg` 里的工具参数（read 的 `nested_*`、search 的 `fetch_schema` / `cache_ttl` 等）现在都是正式旗标，注册表测试钉住「每颗工具参数都有 CLI 落点」。
+
+- **`--dry-run` 与封闭值集的本地校验**：`dhole <cmd> … --dry-run` 把绑定结果原样交成一份 JSON（`{dry_run, tool, args}`）后退出 0，不发请求——旗标怎么落成工具参数、`--arg` 覆盖了什么，第一次就能看见，而不是拿一次真实调用去试。预演过与服务端同一道参数闸（`_reject_unknown_args`，只读 schema、不拨号）：`--arg nope=1` 在预演里就以 2 退出，而不是打印出一份看着合法、真发才被拒的绑定。`--focus-mode` / `--focus-engine` / `--extraction-type` / `--force-fetcher` / `--sort` / `--mode` / `--freshness` 的合法值现在写在注册表里：笔误在解析期以 2 退出并列出全部值（此前它走到服务端，先打一行 `example.com · none · 0 chars` 再以 1 退出，与 `--max-results abc` 的口径相反）；大小写按服务端同样的规则归一（`--focus-mode BEST` 即 `best`）。`dhole commands --json` 同步带上 `choices` / `required_args` / `mutually_exclusive` / `subcommands` / `positional_mode`（`catalog_version: 2`），agent 拿这份目录可以直接拼出合法调用——`subcommands` 与每条命令自己的 `usage` 行是同一份判据（`engines list|probe|reset`、`wire ledger|lock`、`skill status|install` 两处同时出现），`tests/test_cli_spec.py` 钉住两者不许各说一套。
+
+- **运维面 JSON 与凭据的诚实拒绝**：`config list/get/set/unset`、`engines list/probe/reset`、`wire ledger/lock`、`skill status/install`、`doctor`、`version` 都交结构化回执，人读路径原样。CLI 每条命令都是新进程；`dhole creds set/unset` 在 `DHOLE_PERSIST_CREDENTIALS=1` 未开或本机没有加密器（Windows DPAPI）时直接拒绝，而不是把一次内存写入报成成功。
+
+- **真实查询采集与配对盲评**（67 题冻结语料只能分辨 8.6 pp 以上的差异，测不出 0.6 pp 的模型间差距，连实测不行的 `ms-marco` 都能打 0.546）：
+  - `DHOLE_QUERY_LOG=1` 把**真实搜索过的查询词**落进 `~/.dhole/queries.jsonl`（目录 0700、文件 0600、20 MB 滚动），只记查询词与模式 / 结果数 / 引擎 / 重排模型，不记结果、URL、摘要，不联网；默认关，`0` 明说关，路径值按用户给的路径原样写。`DHOLE_USAGE_LOG` 仍不记任何参数值——这是刻意分开的第二份日志。
+  - `evals/real_query_eval.py` 把真实查询走成配对盲评：一次搜索取同一批候选 → 两颗重排器分别打分（子进程各用 `DHOLE_RERANK_MODEL`）→ A/B 顺序随机、隐去模型名的盲表 → 人工勾「top-5 里我认可几条」→ 配对 bootstrap 95% 区间 + 本次 SD 重估。判据写死：n ≥ 100 才给换型结论，区间跨 0 就是没有证据；样本不足时只报本次能分辨的差值。
+  - 钉 `tests/test_query_log.py`（6 条：默认关 / 只记查询词 / 路径与 `0` / 空查询 / 坏路径不抛 / key 形状脱敏）与 `tests/test_real_query_eval.py`（7 条：查询去重 / 稳定排序 / 盲位 / 配对计数 / bootstrap 跨 0 / n=100 判决 / 盲表不含模型名）。
+
+- 钉 `tests/test_cli_spec.py`（65 条：命令/参数与工具 schema 的双向对账、绑定结果过服务端真实参数闸、枚举值集与服务端表的相等断言、`subcommands` 与 `usage` 分支的相等断言、帮助与补全、NDJSON 形状、JSON 错误、颜色开关、帮助不 import 服务端；其中 12 条钉 feed 单 URL 与单行 `--urls-file`、`--dry-run`（read 与 call、预演期的未知参数拒绝、`--json` 拒绝信封）、枚举笔误退出 2 且一次请求都不发）。
+
+- **`web_research(cross_check=true)`：来源一致性报告**（外部 MCP 调研的 P0）。此前只有 `engines_consensus`——判断「几个索引收录了这个 URL」；新参数判断的是「几个**独立可注册域名**对同一句话说了相近的话」。query 切成最多 5 条 claim；读回的正文切句，按 TF-IDF 余弦归到最近的 claim（拉丁词 + 汉字 2/3-gram，不引分词器、不联网、不调模型）；冲突三件套——否定词奇偶、中英反义对、同单位数字不一致——判 `contested` 并给出 `perspectives`；`agreement_score` 只按支持方的独立域名数计（1→0.3、2→0.7、3–4→0.9、5+→1.0），单域名永远是 `unverified`。**这是来源一致性信号，不是事实核查**：多个域名说相近的话不等于为真，同一篇通稿被转载会被域名去重挡住一部分，挡不住的部分写进 `cross_check_basis.warnings`。默认关（`cross_check=true` 才跑）；证据包原样返回，交叉印证自己出错只写 `cross_check_error`。钉 `tests/test_research_cross_check.py`（21 条，含中文归因、45% vs 50%、单域名、字符串 `"false"` 归一、崩溃不拖垮证据包）。
+
+- **`web_search(sources=["package" | "repo"])`：免密开发者数据源**。`package` 精确查 npm / PyPI / crates.io / Go proxy 的版本、license、发布日期、依赖数、仓库地址；带空格的查询在任何一个 registry 上都不是包名，**一个请求都不发**，返回 `bad_query` 并指回普通 web 池；未知包是 `empty`，不是 `error`。`repo` 接受 `owner/repo` 或 github.com URL，返回 stars / forks / open issues / 最近提交日 / license / `ARCHIVED`；GitHub 404 是 `not_found`、免密 60 次/小时的限流是 `blocked`，都不伪装成 empty。两者都不读任何 token。`academic` 同时新增 Crossref 后端（与 arXiv 并行、按标题去重；只有年份的日期降精度，不冒充发布日）。没有新增工具，仍是 13 颗；钉 `tests/test_verticals_dev.py`（17 条）。
+
+- **`dhole research --cross-check`**：CLI 同步这颗参数；claim 与判词进 stderr（`confirmed 0.7 · …`），证据包仍是 stdout。
+
+- **`dhole models fetch`：重排器一次下完**（评分里「一次性进程的结构性约束」那条 7.0 的缺口）。搜索路径把模型加载放在守护线程里，短命 CLI 几秒就退，279MB 只能留下 `.part`；这条命令同步等待：stderr 逐字节进度（TTY 原地刷新、管道每 10% 一行），复用 `.part` + Range 续传，下完核对发布方 sha256。`--model bge-zh|mmarco` 选档，默认跟 `DHOLE_RERANK_MODEL`；已在盘上时只核对、不联网。它只下字节，**不**选模型——`dhole model`（选档）仍不存在，也没长出第 14 颗工具。真机从 36% 的断点续传到 100% 并核对摘要通过；钉 `tests/test_cli_models.py`（10 条）与 `tests/test_reranker_models.py` 的 fetch 六例。
+
+- 钉 `tests/test_route_memory.py`（14 条）与 `tests/conftest.py` 的逐用例重置：档位记忆是进程级状态，一条用例的假成功不许变成下一条的提示。
+
+### 变更
+
+- **CLI 与 17.3 之后的新能力全面对齐**（真实使用反馈：「cli 是之前设计的，后续 mcp 还更新了很多内容」）：17.5 补全 13 条内容命令时，纵向源、`cross_check`、冷启动重排这些后长出来的能力在 CLI 上要么没有出口、要么只有 `--json` 能看到。现在：
+  - `--sources` 是封闭值集（`web, news, academic, qa, code, community, package, repo`）：笔误在解析期以 2 退出并列出全部值，不再白跑一次搜索；值集与 `search_verticals.SOURCE_KINDS` 的相等断言进注册表测试。`dhole state --show/--clear` 的类别同样在本地收口——`--clear models` 直接是用法错误（2），不会发一次注定被拒的请求。
+  - `dhole search --sources package|repo` 的人读出口补齐：stderr 给出 `sources_used`、`requested 6 · delivered 2` 与逐后端的 `empty` / `blocked` 原因（crates 无此包、GitHub 403 限流都如实进报告），行尾带后端与发布日期；`--verbose` 追加 `fetch_hint`。冷启动时即使不加 `--verbose` 也明说这一轮不是模型排的；失败回执同样不加 `--verbose` 就带 `next_action`。
+  - `dhole research --cross-check` 的人读出口补齐 claim 判词、`cross_check_basis`、`agreement` 与全部 `warnings`——「一致性信号，不是事实核查」不再只活在 JSON 里。`--ndjson` 不再丢掉这些信息：研究输出 `evidence` / `source_failed` / `cross_check` 三种行，搜索输出 `source_error` 行；`research` 与 `recall` 也正式挂上 `--ndjson`。
+  - `dhole state --show models --verbose` 列出重排器的 `available` 行（模型、角色、体积、下载状态），`recall --verbose` 报 `dropped_low_relevance`。
+  - README 双语同步：安装段新增「只用命令行、不接宿主」的路径（同一个包，`pip` 装完即可用 `dhole`；隔离安装用 `pipx` / `uv tool`，附升级命令），CLI 段补齐纵向源取值、`--cross-check`、`--ndjson` 的新行、冷启动口径与 `state --show models --verbose`。
+
+  钉 `tests/test_cli_render.py`（6 条新增：纵向源与逐后端失败、无模型说明、失败带 `next_action`、cross-check 告警与 agreement、ndjson 的失败源与 `cross_check` 行、ndjson 的 `source_error` 行）与 `tests/test_cli_spec.py`（4 条新增：sources 值集对账、state 类别对账、research/recall 的 `--ndjson`、未知类别一次请求都不发）。
+
+- **按域抓取档位记忆**（外部 MCP 调研的 P2）：进程内记住每个 hostname 上一次成功的档位（`http` / `stealthy`），TTL 30 分钟、LRU 200 条、只记成功、不落盘。研究循环在同一站点连读多页时，第一页证明需要浏览器档之后，下一页直接走浏览器档，省掉一次注定失败的 HTTP 尝试；这一发不成立就丢掉记录、回退完整阶梯并重新学。只对页面生效——文档 / 落盘 / 条件请求 / 要响应头的那几条路仍走原车道。不加参数、不改响应字段；`escalation_path=stealthy(remembered)` 说明 HTTP 档是**被跳过**而不是失败。
+
+- **连接期 33,092 → 33,612 字符**（+520，≈8.1k token）：`web_research.cross_check` 的参数说明与描述各一句、`web_search.sources` 的两个新值与 Crossref 说明，其余是 `web_research` 描述里那句 "a cross-source signal, not a fact-check"。`dhole research --cross-check` 不进连接期。README 的横向对比表与 `dhole wire ledger` 的读数按新口径重测；8 颗裁剪面 23,727、9 颗 25,861、`web_read,web_search` 11,664。
+
+- **常驻层瘦身：连接期 36,758 → 33,092 字符**（≈8.8k → 8.0k token，−10%）：13 颗工具的描述 9,462 → 6,845（−28%），参数说明再压掉约 1,050 字符。做法是一条判据——**常驻层只回答"什么时候用"，"怎么用"住 `sys_guide`**：`web_act` 的动作键清单、`web_read` 的 archive 状态族（404/410/451）、`headers=` 点名拒绝的三族、`cdp_url` 的 30 天窗口这些**防错的那一句话**留在 wire 上（第一次调用前就必须知道，搬走等于要求先失败一次），其余枚举、边角与配方搬进手册按需取。实测天花板就在这一带：把描述再往下砍，22 条钉住"这句话必须在 wire 上"的守卫同时变红，把那些契约加回去就吃掉了三分之二的收益——剩下 30,241 字符是 JSON schema 的结构本身（参数名、类型、默认值），不删参数就删不动。`test_wire_shape.py` 的 DESC_CAP 棘轮随之落到 288。README 里那张横向对比表的读数按新口径重测。
+
+- **共享浏览器不再是"每次一台新的"：默认落在持久 profile `~/.dhole/profiles/default/`**（真实使用反馈：「每次打开的浏览器都是新的，直接复用不就好了」——更疼的是登录态，今天手输的密码明天就没了）。此前 auto 会话每次进程重启都 `mkdtemp`，cookie / localStorage / 登录态随进程一起消失，于是"今天登录、明天再抓同一个站点"这件事在结构上做不到。现在默认档 `default` 跨进程、跨天活着：两个独立进程实测，第一个进程写下的 cookie 第二个进程读得回来；`cred_defaults(set={'profile': '<name>'})` 换一份，`profile=''` 明确要一次性空会话（退出即焚）。同一份 profile 是单写者（Chrome 的 user-data-dir 不接受第二个写者），所以启动前用 advisory 文件锁判权：拿不到锁的那个进程退回临时目录并记一行日志说明为什么——两个宿主同时开着时第二个照常干活，只是不共享登录态。空闲回收关掉浏览器不再等于丢登录态，下一次抓取打开的还是那一份 profile。钉 `tests/test_the_browser_keeps_one_profile_across_restarts.py`（5 条）。
+
+- **空闲回收默认 5 分钟 → 30 分钟，并长成旋钮 `DHOLE_BROWSER_IDLE_TIMEOUT`**：一次"读页面 + 判断 + 再抓下一页"经常超过 5 分钟，跨过那条线就要白付一次冷启动（实测 2-5 秒），而代价的另一头只是空闲时多占几百 MB。30 分钟覆盖绝大多数间隔，同时仍在一次咖啡休息内把内存还回去；`0` = 永久保活，上限一天，越界按边界钳。读在启动期，改它要重启宿主。可见窗口（`headed=true`）照旧不受回收管——人在里面打字时关掉它，扔掉的是半张登录表单。钉 `tests/test_the_browser_idle_timeout_is_a_knob_not_a_constant.py`（2 条，子进程跑真读值）。
+
+### 修复
+
+- **`web_research(cross_check=true)` 的否定只在 yes/no 问句里算冲突**（真查询归因测量，2026-10-28）：旧判据对陈述句和名词词组也套否定奇偶，真数据里 16 条 oppose 全是这种误判——「without memory leaks」「no traffic」「也不例外」，以及查询本身含 not 的名词词组（"mysql query not using index"）会被来源里没有 not 判成反对。现在只有 yes/no 问句（`Is/Does/…`、`是否/吗`）保留否定极性；其余形状改由数字/反义（含来源之间的分歧）判冲突，开放式问句行为不变，`cross_check_basis.warnings` 明说这一轮的口径。同一批句子（19 条可用真实查询切出的两个子问题、273 句归因）legacy 16 条 oppose → 新判据 0。新评测 `evals/cross_check_attribution.py` 同时量了句子→claim 挂错：clear 子集 184 句 0 挂错；±1 句滑窗把归因数从 273 拉到 350，clear 子集 220 句却有 1 句挂错（0.4%），legacy oppose 33 条 → 新判据 0——判决是不加滑窗，见 `evals/README.md`。钉 `tests/test_research_cross_check.py` 新增 4 条（yes/no 形状、名词词组、陈述句、yes/no 保留否定）；残余噪声是前一轮小样本里 numeric 把版本号当数字（v2 vs v2.14.1），这次不动。
+
+- **冷启动的第一次 `web_search` 不再被重排模型下载卡住**（真机实测：一次普通 `web_search` 挂起 200.0s / 206.5s，全在等 `bge-zh` 那 ~279MB 进盘）。现在默认档 `mode` 只等 3 秒：模型还在下就按跨引擎共识排完这一轮，`fetch_hint` 末尾明说「the local reranker is still being fetched (one-time, resumable)」以及「这一轮不是模型排的」；下载在后台继续（可续传），下一次搜索模型就位即用。同一次真机复测 6.1s 出结果。`sys_state(models)` 与重排器缺失提示同步改口径（「第一次神经搜索在后台取它」），`focus_engine='bm25'` 的补救路径不变。
+
+- **`doc_parse` 对无文字层的扫描 PDF 不再假绿灯**（真机实测：一份图片 PDF 返回 `content_ok=true`、`quality_score=1.0`，正文只有 OCR 占位行）。现在 OCR 跑完仍无文字即判 `pdf_no_text`：`content_ok=false`、`quality_score=null`、`content=[]`，`next_action` 直说「重发同一份文件不会改变什么，去读带文字层的副本」。判定用 `quality.pdf_text_is_absent` 这一颗共享谓词（先剥掉 OCR 头与 `--- Page n ---` 脚手架再判空），`web_read` 与 `doc_parse` 走同一条判据；混排 PDF（正文另有文字）不误伤。
+
+- **`web_research(cross_check=true)` 不再把开放问句判成 `contested`**（真机实测：「What causes …?」这类问句里，来源句子中的否定词被当成反驳，`oppose` 挂上同一条支持句）。现在先识别查询本身是不是开放问句（英 `what/which/who/when/where/why/how`、中 `什么/如何/为什么/怎么/多少/哪个/哪里/谁`，带不带问号都认）：是的话来源句里的否定不再算反驳，`contested` 只由同单位数字冲突、反义对或来源间互相打架产生，`cross_check_basis.warnings` 写明「查询被当作开放问句」；是非问句（`Is …?`）仍按原来的否定奇偶判，不放松。
+
+- **`dhole feed <单个 URL>` 稳定退出 2**：`feed_read` 只收 `urls`（没有单 URL 参数），而命令层把单条位置参数折成 `{"url": …}`，于是帮助里的第一条示例 `dhole feed https://example.com/feed.xml --max-items 10` 必然被工具拒成 `Unsupported argument(s) for feed_read: ['url']`；`--urls-file` 只有一行时走的是同一条路。现在每条命令自己声明折叠形状（read 保留 `url` / `urls` 两种，feed 单条也装进列表）。上一版没发现是因为对账只做了单向——工具的每个参数都有 CLI 落点——而漏掉了反方向：CLI 的落点必须真的是这颗工具的参数，且折叠出的形状必须被它接受。两条账现在都在 `tests/test_cli_spec.py`。
+
+- **`--sort` 的帮助写着服务端不收的值**：文案是 "relevance or date"，而 `search._validate_sort` 只认 `relevance|newest`——照帮助输入得到的是 `error: Invalid sort: 'date'` 加一次白跑的搜索（退出 1，像"抓到了但内容不可用"）。现在值集来自注册表，帮助、校验、`commands --json` 与补全读同一份。
+
+- **`dhole skill install` 装到了宿主不扫的目录**（真实使用反馈：同一套 dhole，在另一个 harness 里模型不调用就能说出 13 颗工具，在 WorkBuddy 里说不出）。根因两层叠在一起：WorkBuddy 对 MCP 工具做了延迟加载（只把名字注入提示词，schema 用 `ToolSearch` 按需取），于是 `tools/list` 里那些描述根本不在模型上下文里；而 dhole 的补偿手段——随包技能——只装 `~/.agents/skills/dhole-web`，WorkBuddy 的技能扫描不含那个目录。装错地方不报错，表现是「技能装了，模型永远不知道」，属于最贵的那种沉默失败。现在 `dhole skill install` 多了 `--target DIR`（`--target=DIR` 同义），把这份技能装进宿主自己的技能根；默认仍是 `~/.agents/skills/dhole-web`——**dhole 不猜宿主是谁，也不往任何宿主的私有目录里自动写文件**。`tests/test_ops.py` 11 条（原有 8 条语义未变，新增 3 条钉「默认一处 / 点名优先 / 两种写法同义」）。
+
+- **三处"只长不缩"的磁盘账**（真实使用反馈：「都不会自动清理历史，占用空间越用越多」，实测一台机器堆了 64 个孤儿 profile 合计 4.5 GB）：
+  - **用量日志轮转**：`DHOLE_USAGE_LOG` 打开后那条 append 没有上限，一年下来是一条几百 MB 的线。现在单文件过 20 MB 就滚成 `.1`（只滚 dhole 自己写的默认路径，用户点名的路径一个字节都不动——那是他的文件）。
+  - **孤儿 profile 清扫**：正常关闭会 rmtree，但被 kill / 崩溃 / 测试 worker 死掉时那一步不执行，目录就永久躺在 temp 里。启动时扫一遍 `dhole_browser_*`：先按 mtime 放旧 6 小时，再靠一次 `os.rename` 探活（目录里有打开的文件时 Windows 抛共享冲突，比枚举全部进程命令行便宜），两道都过才删。活着的、当前进程自己那份、以及 `~/.dhole/profiles/` 下的持久档一律不碰。钉 `tests/test_an_orphan_profile_is_swept_only_when_nobody_holds_it.py`（6 条）。
+  - **正文缓存回收**：SQLite 的 `DELETE` 不缩文件，页留在 free list 里，于是"清过缓存"的库还占着原来的大小。启动时做一次回收，库大过阈值再 `VACUUM`（走 `isolation_level=None` 的连接，否则 VACUUM 会撞上隐式事务）。失败只记一行，绝不挡住启动。钉 `tests/test_a_cache_that_only_grows_is_a_leak.py`（3 条）与 `tests/test_a_log_that_grows_without_bound_is_not_a_diagnostic.py`（4 条）。
+
 ## [17.3] - 2026-10-26
 
 `web_act` 的动作面长出两条新腿：`evaluate` 在页面里跑 JS（它能读 cookie 与登录态，所以没有 `confirm=true` 也没有人工点头时一个字都不跑），坐标 `click` / `drag` 操作没有可寻址 DOM 的 canvas 与自绘控件；`select` / `navigate` / `pdf` 补上下拉框、历史导航与「把当前渲染页打印成 PDF」。`web_request(session_id=)` 让登录 POST 的 Set-Cookie 从此有落点。免密引擎补到 12 家（`shenma` / `seznam`），池序即可信度分层，另有 `exa` / `deepseek` / `firecrawl` / `brave_api` 四颗付费后端可点名。安全侧：SSRF 守卫改按拨号栈的「客户端视图」判主机名，`%2E`、全角点、尾点、全角拉丁这类写法不再能骗过闸门与云元数据端点的封锁。同一代际两条路：MCP 2026-07-28 的无状态直连也受支持。边界不变：零模型、零密钥。
@@ -800,6 +877,8 @@ agent 技能随包分发；修掉「代理环境下抓不了本机服务」这�
 ### 修复
 
 - **日志凭据泄漏**：重试时会把含 `user:pass@` 的代理 URL 写进日志。
+
+[17.5]: https://github.com/ouli-1242/dhole-mcp/compare/v17.3...v17.5
 
 [17.1]: https://github.com/ouli-1242/dhole-mcp/compare/v17.0...v17.1
 

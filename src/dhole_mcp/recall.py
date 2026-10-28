@@ -225,7 +225,6 @@ async def recall_pages(query: str, limit: int = 8,
     per_term_hits: dict[str, int] = {}
     candidates: dict[str, float] = {}   # key -> fetched_at（近者优先排序用）
     scanned = 0
-    loaded: dict[str, dict] = {}
     async with aiosqlite.connect(db_path_s) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(

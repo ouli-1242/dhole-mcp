@@ -523,8 +523,11 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     },
     # 3.2 · 证据包那颗门：三颗数字按数字读（字符串客户端把 "3" 写成 3 是常态），
     # query 是字符串。夹取的宣告住在方法体里（clamped 行），这里只管类型。
+    # cross_check 是"做决定的那颗"：字符串客户端把 "false" 按裸值传是非空字符串 =
+    # 真，于是没人要求的交叉印证会悄悄跑起来、多付一份输出。
     "web_research": {
         "max_sources": "int", "per_source_chars": "int", "timeout": "number",
+        "cross_check": "bool",
     },
     # 提升清单 2 · 本地缓存检索：limit 按数字读（1-20 的夹取住在 recall_pages）。
     "web_recall": {

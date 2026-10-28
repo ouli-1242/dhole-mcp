@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import pytest
 from dhole_mcp.security import validate_url, validate_css_selector, validate_headers, validate_proxy, validate_timeout, validate_search_query, redact_api_key, SecurityError, _normalize_ip_notation
@@ -13,6 +15,8 @@ from dhole_mcp import identity
 from dhole_mcp.server import MasterFetchServer, _REVALIDATE, _SCHEMA_SOURCE_MAX_CHARS, _schema_value_empty, _validate_schema_selectors
 from dhole_mcp.structured import MAX_RECORDS_PER_FIELD, extract_structured
 from dhole_mcp.models import ResponseModel
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================

@@ -355,3 +355,130 @@ def test_preprovisioned_model_dir_downloads_nothing(tiny_env, monkeypatch):
     (model_dir / "vocab.txt").unlink(missing_ok=True)
     onnx, tok = reranker._ensure_model()
     assert onnx is not None and tok is not None, "vocab.txt 缺失不该弄死本来能用的重排"
+
+
+# ─── `dhole models fetch`：同步下载一颗指定模型 ───────────────────────────
+
+def _fetch_env(tmp_path, monkeypatch):
+    """把注册表、模型目录与尺寸下限指到一颗 1 字节的假模型上。"""
+    model = _tiny_model()
+    monkeypatch.setitem(reranker.MODELS, "tiny", model)
+    monkeypatch.setattr(reranker.paths, "models_dir",
+                        lambda: tmp_path / "models")
+    monkeypatch.setattr(reranker, "MIN_MODEL_BYTES", 1)
+    monkeypatch.setattr(reranker, "_reranker_unavailable_reason", "")
+    return model, tmp_path / "models" / "tiny"
+
+
+def test_fetch_model_downloads_every_file_and_reports_progress(tmp_path, monkeypatch):
+    _model, model_dir = _fetch_env(tmp_path, monkeypatch)
+    events: list[tuple[str, int, int]] = []
+
+    def _fake(model, name, dest, progress=None):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"R" * 40)
+        if progress:
+            progress(name, 40, 40)
+        return True
+
+    monkeypatch.setattr(reranker, "_download_model_file_for", _fake)
+    report = reranker.fetch_model("tiny", progress=lambda *a: events.append(a))
+
+    assert report["ok"] is True
+    assert report["model"] == "tiny"
+    assert report["dir"] == str(model_dir)
+    assert report["already_present"] is False
+    assert report["verified"] == "local sha256"
+    status = {row["name"]: row["status"] for row in report["files"]}
+    assert status == {"model.onnx": "downloaded",
+                      "tokenizer.json": "downloaded",
+                      "vocab.txt": "downloaded"}
+    assert [event[0] for event in events] == ["model.onnx", "tokenizer.json",
+                                              "vocab.txt"]
+    assert all(event[1] == 40 and event[2] == 40 for event in events)
+
+
+def test_fetch_model_says_already_present_without_downloading(tmp_path, monkeypatch):
+    _model, model_dir = _fetch_env(tmp_path, monkeypatch)
+    model_dir.mkdir(parents=True)
+    for name, blob in (("model.onnx", b"M" * 40), ("tokenizer.json", b"{}"),
+                       ("vocab.txt", b"v")):
+        (model_dir / name).write_bytes(blob)
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("no download should be attempted")
+
+    monkeypatch.setattr(reranker, "_download_model_file_for", _explode)
+    report = reranker.fetch_model("tiny")
+
+    assert report["ok"] is True
+    assert report["already_present"] is True
+    assert {row["status"] for row in report["files"]} == {"present"}
+    assert report["error"] == ""
+
+
+def test_fetch_model_names_the_file_that_failed(tmp_path, monkeypatch):
+    _model, _model_dir = _fetch_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(reranker, "_download_model_file_for",
+                        lambda *args, **kwargs: False)
+    report = reranker.fetch_model("tiny")
+
+    assert report["ok"] is False
+    assert "download failed for model.onnx" in report["error"]
+    status = {row["name"]: row["status"] for row in report["files"]}
+    assert status["model.onnx"] == "failed"
+
+
+def test_fetch_model_rejects_an_unknown_name_without_touching_the_disk(tmp_path,
+                                                                      monkeypatch):
+    monkeypatch.setattr(reranker.paths, "models_dir",
+                        lambda: tmp_path / "models")
+    report = reranker.fetch_model("nope")
+
+    assert report["ok"] is False
+    assert "unknown reranker model" in report["error"]
+    assert report["files"] == []
+    assert not (tmp_path / "models").exists()
+
+
+def test_fetch_model_verifies_a_preprovisioned_publisher_digest(tmp_path, monkeypatch):
+    """预置目录没有 sidecar 时，fetch 仍要核对发布方摘要，而不是照单全收。"""
+    good = b"R" * 40
+    model = _tiny_model(publisher={"model.onnx": hashlib.sha256(good).hexdigest()})
+    monkeypatch.setitem(reranker.MODELS, "tiny", model)
+    monkeypatch.setattr(reranker.paths, "models_dir",
+                        lambda: tmp_path / "models")
+    monkeypatch.setattr(reranker, "MIN_MODEL_BYTES", 1)
+    model_dir = tmp_path / "models" / "tiny"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.onnx").write_bytes(good)
+    (model_dir / "tokenizer.json").write_bytes(b"{}")
+    (model_dir / "vocab.txt").write_bytes(b"v")
+
+    report = reranker.fetch_model("tiny")
+    assert report["ok"] is True
+    assert report["already_present"] is True
+    assert report["verified"] == "publisher sha256"
+
+
+def test_fetch_model_refuses_a_preprovisioned_file_with_the_wrong_digest(
+        tmp_path, monkeypatch):
+    good = b"R" * 40
+    model = _tiny_model(publisher={"model.onnx": hashlib.sha256(good).hexdigest()})
+    monkeypatch.setitem(reranker.MODELS, "tiny", model)
+    monkeypatch.setattr(reranker.paths, "models_dir",
+                        lambda: tmp_path / "models")
+    monkeypatch.setattr(reranker, "MIN_MODEL_BYTES", 1)
+    model_dir = tmp_path / "models" / "tiny"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.onnx").write_bytes(b"M" * 40)
+    (model_dir / "tokenizer.json").write_bytes(b"{}")
+    (model_dir / "vocab.txt").write_bytes(b"v")
+
+    report = reranker.fetch_model("tiny")
+    assert report["ok"] is False
+    assert "publisher sha256" in report["error"]
+    status = {row["name"]: row["status"] for row in report["files"]}
+    assert status["model.onnx"] == "failed"
+    assert (model_dir / "model.onnx").exists(), \
+        "fetch 只报告，不替用户删文件"

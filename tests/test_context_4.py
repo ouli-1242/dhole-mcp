@@ -10,7 +10,7 @@ import pytest
 from dhole_mcp import search as search_mod
 from dhole_mcp.server import MasterFetchServer
 from dhole_mcp import wire
-from dhole_mcp.context import _FOCUS
+from dhole_mcp.context import _FOCUS, _FOCUS_MODE
 from dhole_mcp.models import ResponseModel
 from dhole_mcp.focus import snap_to_boundary
 from dhole_mcp.quality import _summary_label
@@ -240,11 +240,13 @@ def _page(hits: int = 6, filler: int = 18) -> ResponseModel:
 
 
 def _chunked(result: ResponseModel, *, focus: str | None, max_chars: int = 4_000,
-             offset: int = 0) -> ResponseModel:
+             offset: int = 0, focus_mode: str = "filter") -> ResponseModel:
     token = _FOCUS.set(focus)
+    mode_token = _FOCUS_MODE.set(focus_mode)
     try:
         return _apply_chunking(result.model_copy(), max_chars=max_chars, offset=offset)
     finally:
+        _FOCUS_MODE.reset(mode_token)
         _FOCUS.reset(token)
 
 
@@ -258,6 +260,31 @@ def test_a_focus_cut_page_reports_which_stream_it_counted():
     assert out.total_extracted_chars < out.page_total_chars, (
         "这一路没被切短，那「哪一路」就没内容可说")
     assert "focus-filtered" in out.pagination_basis, out.pagination_basis
+
+
+def test_a_focus_header_is_not_counted_as_page_body():
+    """重点：focus 头部是说明，不是页面正文。
+
+    2026-10-28 实测 `/article`：`page_total_chars=387`，而 filter-best 的
+    `total_extracted_chars=474` —— 头部（约 437 字符）被算进了“过滤后正文”，
+    于是同一句里出现“474 of 387 chars this page holds”。小页面最容易露馅：
+    头部长过正文时，过滤后必然“比整页还长”。这里断言 basis 里用于比较的
+    正文数不超过整页数，且头部单独点名。
+    """
+    page = _page(hits=2, filler=0)
+    out = _chunked(page, focus="cookie 存活时间", focus_mode="best")
+    page_chars = len("\n\n".join(page.content))
+    assert out.page_total_chars == page_chars
+    assert out.total_extracted_chars > out.page_total_chars, (
+        "夹具失灵：小页面的 focus 头部应当让 total_extracted_chars 超过整页，"
+        "这正是旧句子的形状")
+    m = re.search(r"focus-filtered body: ([\d,]+) of ([\d,]+) page chars",
+                  out.pagination_basis or "")
+    assert m, out.pagination_basis
+    kept_body, compared_page = (int(x.replace(",", "")) for x in m.groups())
+    assert compared_page == page_chars
+    assert kept_body <= compared_page, out.pagination_basis
+    assert "focus header is not page content" in out.pagination_basis
 
 
 def test_two_different_focus_words_on_one_page_both_say_so():

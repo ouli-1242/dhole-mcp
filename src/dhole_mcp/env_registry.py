@@ -113,6 +113,16 @@ ALL: tuple[EnvVar, ...] = (
         read_by=("search_metasearch",),
     ),
     EnvVar(
+        name="DHOLE_BROWSER_IDLE_TIMEOUT",
+        kind="int",
+        default="1800",
+        read_at="import",
+        scenario="browser feels cold on every call",
+        summary="Seconds idle before the warm browser is closed; 0 keeps it alive.",
+        bounds=(0, 86400),
+        read_by=("server",),
+    ),
+    EnvVar(
         name="DHOLE_DEEPSEEK_API_KEY",
         kind="secret",
         default="",
@@ -236,6 +246,15 @@ ALL: tuple[EnvVar, ...] = (
         scenario="search engines blocked / rate-limited / should use a proxy",
         summary="Search egress proxy, one URL (HTTPS/HTTP/ALL_PROXY as fallbacks).",
         read_by=("errors", "search", "search_engines", "search_metasearch", "search_proxy", "server"),
+    ),
+    EnvVar(
+        name="DHOLE_QUERY_LOG",
+        kind="flag",
+        default="off",
+        read_at="call",
+        scenario="building a real-query evaluation set",
+        summary="Write the queries you actually searched with to a local file; no results, no network.",
+        read_by=("audit", "server"),
     ),
     EnvVar(
         name="DHOLE_TAVILY_API_KEY",

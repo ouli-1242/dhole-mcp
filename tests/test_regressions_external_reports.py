@@ -142,6 +142,66 @@ class TestFailureContentIsEmpty:
         assert r.error.startswith("auth_required")
         assert "not_a_pdf" not in " ".join(r.content)
 
+    @staticmethod
+    def _pdf_page(status: int, body: bytes):
+        class FakePage:
+            encoding = "utf-8"
+            headers = {"content-type": "text/html; charset=utf-8"}
+        page = FakePage()
+        page.status = status
+        page.body = body
+        page.url = "https://example.com/paper.pdf"
+        return page
+
+    def test_a_pdf_url_behind_a_403_challenge_is_a_wall_not_a_bad_pdf(self):
+        """2026-10-28 本地受控靶：403 + cf-challenge 曾被判成 not_a_pdf
+        （retryable=false，出路是“检查 URL”），而浏览器档其实能过这面墙。"""
+        page = self._pdf_page(403, b"<html><head><title>Just a moment...</title>"
+                                   b"</head><body>cf-challenge</body></html>")
+        r = _translate_response(page, "markdown", None, "http", 1)
+        assert r.content == []
+        assert r.status == 403
+        assert r.error.startswith("bot_wall_detected"), r.error
+        annotated = _with_agent_hints(_annotate_quality(r))
+        assert annotated.diagnosis and annotated.diagnosis["code"] == "bot_wall"
+        assert "does not send .pdf" in annotated.diagnosis["recover_with"], (
+            "浏览器档在 PDF 上是**按类型故意不升**，不是这台机器起不来；"
+            f"诊断却写成后者：{annotated.diagnosis}")
+        assert "unavailable on this machine" not in annotated.next_action, annotated.next_action
+        assert "switch source" in annotated.next_action, annotated.next_action
+
+    def test_a_pdf_challenge_that_the_browser_already_rendered_is_not_sent_back(self):
+        """force_fetcher='stealthy' 跑过之后，回执必须说“已经渲染过”，
+        而不是“浏览器档不可用”或“再升级一次”。"""
+        page = self._pdf_page(403, b"<html><head><title>Just a moment...</title>"
+                                   b"</head><body>cf-challenge</body></html>")
+        r = _translate_response(page, "markdown", None, "stealthy", 1)
+        r.escalation_path = "direct:stealthy"
+        annotated = _with_agent_hints(_annotate_quality(r))
+        assert annotated.diagnosis and annotated.diagnosis["code"] == "bot_wall"
+        assert "already rendered" in annotated.diagnosis["recover_with"], annotated.diagnosis
+        assert "already rendered" in annotated.next_action, annotated.next_action
+        assert "unavailable on this machine" not in annotated.next_action
+
+    def test_a_pdf_url_behind_a_plain_403_reports_the_status(self):
+        """没有挑战页特征时，403 本身仍是比“URL 不像 PDF”更接近事实的诊断。"""
+        page = self._pdf_page(403, b"<html><body>Forbidden</body></html>")
+        r = _translate_response(page, "markdown", None, "http", 1)
+        assert r.content == []
+        assert r.error.startswith("http_error_403"), r.error
+        assert r.error != "not_a_pdf: URL ends in .pdf but the response is HTML, not a PDF (possibly a redirect/error page). Try the direct PDF link."
+        annotated = _with_agent_hints(_annotate_quality(r))
+        assert annotated.diagnosis and annotated.diagnosis["code"] == "http_error_403"
+        assert annotated.diagnosis["retryable"] is False
+        assert ("force_fetcher" in annotated.next_action
+                or "switch source" in annotated.next_action), annotated.next_action
+
+    def test_a_pdf_url_returning_plain_html_is_still_not_a_pdf(self):
+        page = self._pdf_page(200, b"<html><body>A landing page about widgets.</body></html>")
+        r = _translate_response(page, "markdown", None, "http", 1)
+        assert r.content == []
+        assert r.error.startswith("not_a_pdf"), r.error
+
     def test_empty_image_body_is_not_a_js_shell_worth_a_browser(self):
         """空正文 + 200 正是 _is_js_shell 升级的条件 —— 图片页必须被排除在外，
         否则 OCR 失败会换来一次 30~40s 的浏览器渲染，结果还是同一张图。"""

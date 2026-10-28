@@ -3,7 +3,9 @@
 由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
+
 from __future__ import annotations
+
 
 import pytest
 from dhole_mcp.parse import parse_file
@@ -12,6 +14,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 import re
 import zipfile
+
+pytestmark = pytest.mark.smoke
 
 
 # ============================================================================

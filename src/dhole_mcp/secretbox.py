@@ -75,6 +75,16 @@ def protect(value: str) -> str:
     return _PREFIX + base64.b64encode(blob).decode("ascii")
 
 
+def is_protected(stored: str) -> bool:
+    """This value is the ``dpapi:`` form rather than a pre-17.1 plaintext one.
+
+    The distinction decides *whose* file a store on disk is: a memory-mode process
+    may absorb-and-delete a legacy plaintext store, but a file whose values are
+    encrypted belongs to a persist-mode process and must be left for it.
+    """
+    return str(stored).startswith(_PREFIX)
+
+
 def unprotect(stored: str) -> str:
     """逆操作。没有 ``dpapi:`` 前缀的值是 pre-17.1 文件的旧明文，原样交回——
     两处存储在启动时迁移它们，所以这条放行是给迁移"有东西可读"，不是一种存储

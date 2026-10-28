@@ -13,8 +13,6 @@
 import subprocess
 import sys
 
-import pytest
-
 from dhole_mcp import watch as watch_mod
 
 

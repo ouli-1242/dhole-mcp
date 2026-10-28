@@ -151,7 +151,7 @@ def test_resolve_index_hands_frame_rows_to_their_frame():
     inner = _FakeFrame("app", "http://x/frame/inner", [ROW_INNER_1], 1)
     page = _FakePage([ROW_MAIN], 1, children=[inner])
     asyncio.run(snapshot_elements(page))
-    loc = asyncio.run(resolve_index(page, 1))
+    asyncio.run(resolve_index(page, 1))
     assert inner.located == [INTERACTIVE_SELECTOR]
 
 
@@ -166,7 +166,7 @@ def test_a_stale_frame_index_still_fails_loudly():
 def test_frame_addressed_by_name():
     inner = _FakeFrame("app", "http://x/frame/inner", [], 0)
     page = _FakePage([], 0, children=[inner])
-    loc = asyncio.run(_target_locator(
+    asyncio.run(_target_locator(
         page, {"selector": "#save", "frame": "app"}))
     assert inner.located == ["#save"]
 
@@ -182,7 +182,7 @@ def test_frame_addressed_by_url_prefix():
 
 def test_frame_addressed_by_css_falls_through_to_frame_locator():
     page = _FakePage([], 0)              # 没有可按名/URL 认领的帧
-    loc = asyncio.run(_target_locator(
+    asyncio.run(_target_locator(
         page, {"selector": "#save", "frame": "#app"}))
     assert page.frame_located == "#app"
 

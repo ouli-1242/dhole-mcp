@@ -41,6 +41,24 @@ Wire it into a host (Claude Desktop / Cursor / Codex / Cherry Studio — field n
 
 No arguments, no keys, no environment variables. Restart the host and just ask.
 
+### Command line only, no host
+
+The CLI and the MCP server ship in the same package: the `pip install dhole-mcp` above already puts the `dhole` command on your PATH — skip the `mcpServers` block and there is no host to start:
+
+```bash
+dhole read https://example.com
+dhole search "python asyncio"
+```
+
+To keep it as an isolated global tool instead of mixing it into a project environment, install the same package with pipx or uv (the entry point is still `dhole`):
+
+```bash
+pipx install dhole-mcp        # or: uv tool install dhole-mcp
+dhole doctor
+```
+
+Every CLI call is its own process: nothing stays resident, no port is opened, no host is needed. The on-demand browser / PDF / OCR notes above apply unchanged. Upgrade with `pip install -U dhole-mcp` (`pipx upgrade dhole-mcp` / `uv tool upgrade dhole-mcp` for the isolated installs).
+
 <details>
 <summary>Or let the agent install it itself</summary>
 
@@ -84,8 +102,8 @@ All 13 tools register by default. Install it and everything is already reachable
 | `web_read` | Fetches any URL: the anti-bot ladder, PDF / OCR, batching, focused extraction; returns text, **bytes** (`save_to`) or **evidence** (status line / headers / the 302 chain); `check` answers "did this page change" and attaches a unified diff |
 | `web_act` | Works on the page: click, fill, **select a dropdown**, press keys, drag, scroll, screenshot, **upload files**, **answer dialogs**, **multi-tab**, **back through history**, **print to PDF**; a submission pauses by default until you say yes |
 | `web_request` | Sends one non-GET (POST / PUT / PATCH / DELETE / HEAD), exactly once: no retry, no cache, no browser escalation |
-| `web_search` | 12 keyless engines in parallel + a local reranker, optionally fetching the full text of the top three; plus five vertical sources (news / papers / Q&A / code / community) |
-| `web_research` | One question, one call, one evidence pack with `[n] URL` citations; a source that fails explains why instead of dragging the pack down |
+| `web_search` | 12 keyless engines in parallel + a local reranker, optionally fetching the full text of the top three; plus seven vertical sources (news / papers (arXiv + Crossref) / Q&A / code / community / package metadata / GitHub repositories) |
+| `web_research` | One question, one call, one evidence pack with `[n] URL` citations; a source that fails explains why instead of dragging the pack down. `cross_check=true` adds a source-agreement report (claims, supporting/opposing domains, `agreement_score`) — an agreement signal, not a fact-check |
 | `web_recall` | Searches **the pages this machine already read**: zero network, zero model; returns pointers, excerpts and staleness flags |
 | `web_crawl` | Same-site crawling: sitemaps, keyword filters, path subtrees |
 | `web_discover` | A map of the site's outbound URLs — see what is there before choosing what to read |
@@ -106,7 +124,7 @@ Once installed, just talk:
 
 ## How it differs from other fetchers
 
-- **Zero keys**: 12 keyless search engines, five vertical sources, the anti-bot ladder and the reranker — none of them needs an account or a top-up. The optional `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` backends are called only when you configured a key **and** name them.
+- **Zero keys**: 12 keyless search engines, seven vertical sources, the anti-bot ladder and the reranker — none of them needs an account or a top-up. The optional `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` backends are called only when you configured a key **and** name them.
 - **Zero models**: judgement belongs to the outer agent; dhole stays a deterministic tool layer. The same page fetched twice gives the same result. No small model quietly decides "this page is probably about X".
 - **Fully local**: the response cache, cookies and reranker live in `~/.dhole`. Apart from the sites you ask it to fetch, the process sends nothing anywhere.
 - **Honest failures**: every call answers with the same JSON — how many characters were extracted, which tier ran, what to call next. An empty extraction says it was empty; a grey anti-bot page is never packaged as "content".
@@ -120,15 +138,15 @@ Once installed, just talk:
 | Brave Search | 8 | 110,719 | ~27.7k | API key, metered |
 | Firecrawl | 28 | 94,937 | ~23.7k | credits |
 | Playwright (all caps) | 72 | 45,602 | ~11.4k | free |
-| **dhole-mcp** | **13** | **36,758** (34,031 tools + 2,727 instructions) | **~8.8k** | free, keyless |
+| **dhole-mcp** | **13** | **33,612** (30,885 tools + 2,727 instructions) | **~8.1k** | free, keyless |
 | Playwright (default) | 25 | 20,286 | ~5.1k | free |
 | Tavily | 5 | 7,694 | ~1.9k | API key, metered |
 | Exa (hosted, tools/list only) | 2 | 2,419 | ~0.6k | keyless, rate-limited |
 | Fetch (official reference) | 1 | 1,150 | ~0.3k | free |
 
-- Fourth cheapest of seven products (third if Exa is excluded; fifth if Playwright's two tiers are counted separately) — **2.6–3.0× cheaper** than the two most popular options, Brave and Firecrawl (character ratios of 3.02 and 2.59).
-- **Fewer tools does not mean a cheaper description**: Brave's 8 tools cost 27.7k (~3.5k per tool); dhole's 13 average ~0.7k each and cover fetch / search / crawl / act / research / feed / PDF / recall / local documents.
-- Those 2,727 characters (~656 tokens) of instructions are the only usage guide paid at connect time. Deep documentation never enters the context — whoever asks pays for it (`sys_guide`, or `dhole skill install`). Trimming to `DHOLE_TOOLS=web_read,web_search` brings the connect cost down to about 3.1k.
+- Fourth cheapest of seven products (third if Exa is excluded; fifth if Playwright's two tiers are counted separately) — **2.9–3.3× cheaper** than the two most popular options, Brave and Firecrawl (character ratios of 3.35 and 2.87).
+- **Fewer tools does not mean a cheaper description**: Brave's 8 tools cost 27.7k (~3.5k per tool); dhole's 13 average ~0.6k each and cover fetch / search / crawl / act / research / feed / PDF / recall / local documents.
+- Those 2,727 characters (~656 tokens) of instructions are the only usage guide paid at connect time. Deep documentation never enters the context — whoever asks pays for it (`sys_guide`, or `dhole skill install`). Trimming to `DHOLE_TOOLS=web_read,web_search` brings the connect cost down to 11,664 characters (~2.8k).
 
 **Variable cost** — one call against the same dense documentation page (`docs.python.org/3/library/asyncio-task.html`), measuring how much comes back:
 
@@ -152,7 +170,7 @@ Same search term (`model context protocol`): Tavily basic 4,605 chars (the leane
 Two doors: the `env` block in the host config (needs a restart), or `dhole config set NAME value`, which writes to `~/.dhole/config.json` and takes effect on the next call. **env always wins.** The defaults are usually what you want — if you are unsure, set nothing.
 
 <details>
-<summary>All 15 knobs</summary>
+<summary>All 21 knobs</summary>
 
 | Variable | When to set it |
 |---|---|
@@ -162,6 +180,7 @@ Two doors: the `env` block in the host config (needs a restart), or `dhole confi
 | `DHOLE_HTTP_TOKEN` | The bearer gate for the `--http` transport; unset means an open port |
 | `DHOLE_PERSIST_CREDENTIALS` | Writes session cookies and credentials to disk (DPAPI-encrypted on Windows). Default: memory only, cleared on exit |
 | `DHOLE_USAGE_LOG` | Local log of calls and writes; never records argument values, never phones home |
+| `DHOLE_QUERY_LOG` | Opt-in local record of the queries you actually searched with (mode / result count only, no results, URLs or snippets, no network) for real-query evaluation |
 | `DHOLE_TOOLS` | Registers only the listed tools — **naming any disables the rest** |
 | `DHOLE_DEFAULT_ENGINES` | Overrides the default search pool |
 | `DHOLE_SEARCH_ROW_FILTER` | `off` disables the SEO-farm row filter (on by default) |
@@ -178,7 +197,7 @@ Two doors: the `env` block in the host config (needs a restart), or `dhole confi
 
 The default pool is 12 keyless engines and **the pool order is a trust tier** (the reliably reachable workhorses first, then the ones that hit per-IP limits / anti-bot / regional blocks in the middle, small niche indexes with shallow coverage last; the merged ranking is layered by the same table, so the workhorses speak first): `baidu` / `bing` / `bing_global` / `duckduckgo` (`ddg`) / `yahoo` / `brave` / `sogou` / `so360` (`360`) / `shenma` / `yandex` / `seznam` / `marginalia`. `engines=` can only narrow the pool, never add to it. There are 9 index families: `yahoo` belongs to Bing along with `bing` / `bing_global` / `duckduckgo` (more entry points, not more families); `shenma` is Alibaba's mobile-owned index (Quark runs on the same infrastructure); `seznam` is a Czech portal's own index; `marginalia` indexes the independent small web. Five engines work from a domestic China connection without a proxy: `baidu` / `bing` / `sogou` / `so360` / `shenma`. Six keyed backends exist alongside them — `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` (`brave_api` is the paid stable entry for the same index as the keyless `brave`).
 
-Reranking uses a local cross-encoder, downloaded on first use (`bge-zh` ~279MB / `mmarco` ~119MB); switching tiers needs a host restart. With no model available it buckets and sorts by query-term coverage and never drops a row. Public benchmarks on a frozen corpus: `python evals/vertical_search_baseline.py` and `python evals/ranking_baseline.py --tiers` — method and both samples in [evals/README.md](evals/README.md).
+Reranking uses a local cross-encoder, downloaded on first use (`bge-zh` ~279MB / `mmarco` ~119MB); switching tiers needs a host restart. To finish the download before the first search, run `dhole models fetch` (optionally `--model mmarco`; progress on stderr, a cut download resumes on the next run, and the finished file is checked against the publisher sha256); the search path itself never waits for it — with no model it buckets and sorts by query-term coverage and never drops a row. Public benchmarks on a frozen corpus: `python evals/vertical_search_baseline.py` and `python evals/ranking_baseline.py --tiers` — method and both samples in [evals/README.md](evals/README.md).
 
 **We do not promise an SLA for keyless public APIs.** What we promise is that failures land in the report honestly and never get dressed up as "no results".
 
@@ -187,7 +206,7 @@ Reranking uses a local cross-encoder, downloaded on first use (`bge-zh` ~279MB /
 <details>
 <summary>Context cost</summary>
 
-Full connect overhead is 36,758 characters (~8.8k tokens across 13 tools, measured). Trimmed by usage: read / search / request / crawl / documents / feeds / state / guide — those 8 tools — are 26,387 characters, and 9 tools with `web_discover` are 28,709; a trimmed tool leaves the wire together with its own routing line. Do not pick "the smallest N tools" by size alone — that is how you end up excluding `web_read` and `web_act`.
+Full connect overhead is 33,612 characters (~8.1k tokens across 13 tools, measured). Trimmed by usage: read / search / request / crawl / documents / feeds / state / guide — those 8 tools — are 23,727 characters, and 9 tools with `web_discover` are 25,861; a trimmed tool leaves the wire together with its own routing line. Do not pick "the smallest N tools" by size alone — that is how you end up excluding `web_read` and `web_act`.
 
 </details>
 
@@ -204,12 +223,42 @@ Full connect overhead is 36,758 characters (~8.8k tokens across 13 tools, measur
 
 | Command | What it is for |
 |---|---|
-| `dhole doctor` | Install health check, with a fix command per failing item |
-| `dhole config list` / `set` / `unset` | Change knobs, see the current value and where it came from |
-| `dhole engines list` / `probe` / `reset` | Engine cooldown state, measured health, clear it |
+| `dhole read <url> [url2 ...]` | Fetch without an MCP host: stdout is the page text (`--max-chars` / `--offset` / `--timeout S`) |
+| `dhole search <query>` | Keyword search: one ranked row per result on stdout (`--max-results N` / `--site` / `--freshness`; `--sources package,repo,academic,…` for the seven vertical sources, packages and repositories by exact name) |
+| `dhole crawl <url>` | Crawl one site: one section per page on stdout (`--max-pages N` / `--max-depth N`) |
+| `dhole discover <url>` | Site map: one URL per line on stdout (`--sitemap`) |
+| `dhole research <query>` | A cited evidence pack on stdout, with `[n]` + URL per block (`--max-sources N`; `--cross-check` adds a source-agreement report) |
+| `dhole recall <query>` | Find pages this machine already read: URL + snippet (local cache only) |
+| `dhole request <url> --method ...` | One non-GET request (writes need `--confirm`; `--body-file` keeps secrets out of shell history) |
+| `dhole act <url> --actions ...` | Run an actions chain (JSON / `@file` / `-`); each action's receipt goes to stderr |
+| `dhole doc <file>` | Local file as markdown (pdf / docx / xlsx / csv / pptx / odt …) |
+| `dhole feed <url> [url2 ...]` | RSS/Atom entries, one section per feed (`--since` polls incrementally) |
+| `dhole state` | Local-state census; `--show cache,models`, `--clear cache`, `--clear sessions --confirm` |
+| `dhole models fetch [--model NAME]` | Download the reranker in full: progress on stderr, a cut download resumes, publisher sha256 verified (`--model bge-zh\|mmarco`, default follows `DHOLE_RERANK_MODEL`) |
+| `dhole creds [show\|set\|unset]` | The redacted identity store (`set` reads JSON / `@file` / stdin) |
+| `dhole guide [topic] [section]` | Read dhole's own handbook |
+| `dhole call <tool> [--arg ...]` | Generic entry for any MCP tool (`--args` takes JSON; JSON by default, `--text` prints the content channel) |
+| `dhole tools [--json]` | The live parameter surface of all 13 tools (`call` accepts these names) |
+| `dhole help [command]` / `dhole <command> --help` | Full help: every flag, example and exit code |
+| `dhole commands [--json]` | Machine-readable command catalog (flags, positionals, tool mapping) |
+| `dhole completion bash\|zsh\|fish\|powershell` | Print the completion script for that shell |
+| `dhole doctor [--json]` | Install health check, with a fix command per failing item |
+| `dhole config list` / `get` / `set` / `unset` | Change knobs, see the current value and where it came from (all accept `--json`) |
+| `dhole engines list` / `probe` / `reset` | Engine cooldown state, measured health, clear it (all accept `--json`) |
 | `dhole watch add` / `list` / `run` | Page-change watchlist; `run` exits 0 unchanged / 1 changed / 2 check failed, `--notify` raises a desktop notification |
-| `dhole skill install` | Installs the packaged handbook as a native skill in your host |
-| `dhole -v` | Version plus the capability panel |
+| `dhole skill status` / `install` | Installs the packaged handbook as a native skill (defaults to `~/.agents/skills`; `--target DIR` for a host's own root) |
+| `dhole wire ledger` / `lock` | Connect-face cost ledger and its lock (`--json`) |
+| `dhole version` / `dhole -v` | Version plus the capability panel (`version --json` is the machine form) |
+
+All 13 content commands mirror the 13 MCP tools: stdout carries content, stderr carries metadata, so both pipe cleanly. Exit codes: 0 = success with content, 1 = fetched but not usable (`content_ok=false` or a non-empty `error`), 2 = usage error. With `--json`, stdout is the full receipt (the same bytes MCP carries unless `--pretty` is used); `dhole guide` is prose, so there `--json` wraps the whole document as one JSON string. Any tool argument not listed on the command goes through `--arg NAME=VALUE` (JSON is parsed as JSON, e.g. `--arg include_links=true`).
+
+**Output and automation**: `--ndjson` turns a batch read, crawl, search, feed, research or local recall into one JSON object per line (each carries a `type`; a failed vertical source is a `source_error` row, while research emits `evidence` / `source_failed` / `cross_check` rows); `--pretty` indents JSON; `--quiet` drops stderr metadata (errors still print); `--verbose` adds summaries and the next hop; `--progress` shows elapsed time on a TTY; `--no-color` / `--color=auto|always|never` control colour; `--dry-run` prints the bound call as `{dry_run, tool, args}` and exits 0 without sending a request, so you can see how flags map onto tool parameters before spending one. Global flags work before or after the command (`dhole --json read URL`). `--urls-file FILE` or a positional `-` reads a URL list from a file / stdin for batch reads and `feed`. Under `--json`, usage errors emit `{"error": "...", "exit_code": 2}` instead of prose only.
+
+Vertical sources and cross-check report to stderr as well: `dhole search --sources package` names each backend's `empty` / `blocked` status plus `requested/delivered`, and tags rows with backend and publish date; `dhole research --cross-check` prints claim verdicts, `cross_check_basis`, `agreement` and warnings (an agreement signal, not a fact-check). When the reranker is not in place yet, the CLI takes the same cold-start path as MCP: this round is ranked by cross-engine consensus and stderr says why; `dhole state --show models --verbose` shows download state.
+
+`dhole call` is the escape hatch for the argument surface: named flags stay preferred; use it when a tool argument has no flag yet. For example, `dhole call web_read --arg url=https://example.com --arg nested_max=3`.
+
+**Every CLI call is its own process**: session cookies and `cred_defaults` live in memory by default, so using them across commands needs `DHOLE_PERSIST_CREDENTIALS=1` (`dhole creds set/unset` refuses outright when it is off, rather than pretending to write). Writes in `dhole request` / `dhole act` still go through the tools' own `confirm` gates.
 
 Monitoring is polling, not push: the schedule is your cron / systemd timer. There is no webhook egress — that is a decision, not a gap: dhole is a read-only local tool layer and will not become a process that POSTs page content somewhere else.
 

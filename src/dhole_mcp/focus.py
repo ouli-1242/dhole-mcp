@@ -735,6 +735,11 @@ def focus_content(
                 f" The best block is only {len(blocks[top].strip())} chars - "
                 "possibly just a heading with no answer; keep mode unset "
                 "(filter) or reword the focus query.")
+        if stats_out is not None:
+            # 头部不是页面正文。调用方要拿它把"过滤后正文"与"整页长度"放回同一
+            # 把尺上比较（`server._pagination_basis`），否则小页会出现
+            # "474 of 387 chars" 这种算术不可能。
+            stats_out["header_chars"] = len(header)
         return header + "\n\n" + "\n\n".join(blocks[i] for i in range(n) if i in top_set)
 
     dropped = _dropped_structural(blocks, keep_set)
@@ -759,4 +764,7 @@ def focus_content(
             f"by {scorer_note}",
             _dropped_structural_note(dropped), presence,
             "Pass focus='' for the full page")
+    if stats_out is not None:
+        # 同 best 分支：头部字符不是页面正文，单独记账。
+        stats_out["header_chars"] = len(header)
     return header + "\n\n" + kept
