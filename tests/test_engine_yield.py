@@ -120,6 +120,28 @@ class TestYieldVerdicts:
         assert ms.engine_health()["bing"]["verdict"] == "healthy"
         assert ms._ENGINE_YIELD["bing"]["drift"] == 0
 
+    def test_a_filter_that_drops_every_usable_row_is_not_parser_drift(self, stats_dir):
+        """自滤前有 5 行可用、自滤后 0 行：修的是过滤器，不是 xpath。"""
+        inst = {"bing": _engine("bing")}
+        inst["bing"].last_extract = (8, 0)
+        inst["bing"].last_raw_usable = 5
+        ms._record_engine_outcomes({"bing": "empty"}, inst)
+        ms._record_engine_outcomes({"bing": "empty"}, inst)
+
+        health = ms.engine_health()["bing"]
+        assert health["verdict"] == "filtered_out", health
+        assert health["drift"] == 0, f"过滤器的问题不该累计解析器漂移：{health}"
+        assert health["last_raw"] == 5, health
+
+    def test_an_old_row_without_the_raw_count_still_reads_as_parser_drift(self, stats_dir):
+        """向后兼容：旧落盘行没有 last_raw，判据不能因此把它洗成 healthy。"""
+        inst = {"bing": _engine("bing")}
+        inst["bing"].last_extract = (8, 0)
+        ms._record_engine_outcomes({"bing": "empty"}, inst)
+        ms._record_engine_outcomes({"bing": "empty"}, inst)
+        assert ms.engine_health()["bing"]["verdict"] == "parser_drift"
+        assert ms._ENGINE_YIELD["bing"]["last_raw"] == -1
+
     def test_blocked_and_preempted_are_not_mixed_with_parse_failure(self, stats_dir):
         blocked = _engine("bing")
         ms._record_engine_outcomes({"bing": "circuit_open"}, {"bing": blocked})
@@ -210,6 +232,24 @@ class TestDiagnosticsRow:
         })
         assert "blocked" in state and "PARSER BROKEN" not in state
         assert ok is True, "被墙不是解析器坏了，不该抢走同一个告警位"
+
+    def test_a_filter_that_drops_all_rows_is_named_as_such(self, stats_dir):
+        _, state, ok = self._row({
+            "bing": {"status": "empty", "last_nodes": 8, "last": 0, "last_raw": 5,
+                     "mean": 0, "drift": 0, "zero": 0, "ts": time.time()},
+        })
+        assert "filter dropped all" in state, state
+        assert "5 usable before its own filter" in state, state
+        assert "PARSER BROKEN" not in state, state
+        assert ok is False, "过滤器丢光可用行也是 dhole 侧的损失，不该显示为正常"
+
+
+    def test_the_filter_verdict_names_the_filter_and_the_pre_filter_count(self):
+        from dhole_mcp import engine_yield
+        text = engine_yield.explain("filtered_out", 8, 0, "", raw=5)
+        assert "8 result containers" in text and "5 had a usable link/title" in text, text
+        assert "filter" in text.lower(), text
+        assert "parser problem" in text.lower() or "not a parser" in text.lower(), text
 
     def test_zero_is_not_confused_with_missing(self, stats_dir):
         """0 条可用产出是这里最有意义的值，不能被当成"没有观测"。

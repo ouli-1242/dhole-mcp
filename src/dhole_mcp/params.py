@@ -560,6 +560,8 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # 共识地板是"做决定的那颗"：字符串客户端写 "2" 时按裸值传会进到比较里
         # （`"2" >= 2` 当场 TypeError），而它的判据是"够不够独立佐证"，不是排序。
         "fetch_min_consensus": "int",
+        # terse 是布尔：字符串客户端写 "false" 时不能当非空字符串读成真。
+        "terse": "bool",
     },
     "feed_read": {"max_items": "int", "timeout": "int"},
     # sys_state normalizes its three arguments in _validate_tool_args, because its

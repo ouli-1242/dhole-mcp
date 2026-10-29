@@ -78,8 +78,11 @@ class FeedResult(BaseModel):
     discovered_from: str = Field(
         default="",
         description="Set when the URL was a web page: the feed was found through "
-                    "that page's <link rel=\"alternate\" type=\"application/rss+xml\">, "
-                    "so source_url is the page and the parsed feed is elsewhere.")
+                    "that page (a declared <link rel=\"alternate\" type=\"application/rss+xml\">, "
+                    "an RSS/Atom anchor in its own markup, or - on a homepage that "
+                    "declares nothing - a well-known path such as /feed or /rss.xml), "
+                    "so source_url is the feed itself and this is the page you named. "
+                    "Empty when the URL you passed was the feed.")
     since: str = Field(default="", description="The cutoff this result was filtered by (normalized to ISO-8601 UTC), empty when no filter was asked for.")
     fetched_at: str = Field(
         default="",
@@ -398,6 +401,85 @@ def _discover_feed_links(html: str, base_url: str) -> list[str]:
     return out
 
 
+#: 页脚里通往 feed 的普通锚点：URL 或链接文字带 rss/atom/feed 的形状。这是比
+#: <link rel=alternate> 更宽的一把 —— 自托管博客、地方媒体常把入口放在页脚，而
+#: 2026-10-29 实测 fjdaily.com 的首页就是这种页面：声明标签一个都没有，`feed_read`
+#: 于是对着一张有 RSS 的报纸首页报 "not a feed"。
+_FEED_ANCHOR_RE = re.compile(
+    r"<a\b[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+    re.IGNORECASE | re.DOTALL,
+)
+_FEED_WORD_RE = re.compile(r"(?:^|[/._-])(?:rss|atom|feed)(?:[/._-]|$)", re.IGNORECASE)
+_FEED_ANCHOR_TEXT_RE = re.compile(r"\b(?:rss|atom|feed)\b", re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _discover_feed_anchors(html: str, base_url: str) -> list[str]:
+    """页面里以 RSS/Atom/Feed 为名或地址的**同源**锚点。
+
+    只认同源：声明标签可以指向 FeedBurner 一类的第三方，但那是一个经过作者选择的
+    地址；页脚里任意一个跨站链接不该被我们当成"这个站的 feed"去抓。
+    """
+    from html import unescape
+    from urllib.parse import urljoin, urlsplit
+
+    base_host = (urlsplit(base_url).hostname or "").lower()
+    out: list[str] = []
+    for m in _FEED_ANCHOR_RE.finditer(html):
+        href = m.group(1).strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "data:")):
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlsplit(absolute)
+        if parsed.scheme not in ("http", "https"):
+            continue
+        if (parsed.hostname or "").lower() != base_host:
+            continue
+        label = unescape(_TAG_RE.sub(" ", m.group(2))).strip()
+        if not (_FEED_WORD_RE.search(parsed.path or "")
+                or _FEED_ANCHOR_TEXT_RE.search(label)):
+            continue
+        if absolute not in out:
+            out.append(absolute)
+        if len(out) >= 2:
+            break
+    return out
+
+
+#: 站点根上的常见 feed 位置。只对**首页**试：从一篇深层文章猜 `/feed`，抓到的是整站
+#: 或另一个栏目的源，而 `feed_read` 的合同本来就是"给站点入口"。顺序按野生站点的
+#: 常见度排，WordPress / Ghost / Hugo 都在前两条里。
+_COMMON_FEED_PATHS = ("/feed", "/rss.xml", "/atom.xml", "/feed.xml", "/index.xml")
+
+
+def _common_feed_candidates(url: str) -> list[str]:
+    """首页才试的常见 feed 地址（同源根路径，按 `_COMMON_FEED_PATHS` 排序）。"""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(url)
+    if (parsed.path or "/") not in ("/", ""):
+        return []
+    if not parsed.scheme or not parsed.netloc:
+        return []
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return [origin + p for p in _COMMON_FEED_PATHS]
+
+
+def _feed_probe_order(html: str, url: str) -> list[str]:
+    """这一页值得试的候选，按可信度排序，最多 3 发。
+
+    声明的 <link> 是作者写下的合同，先试；它一个都没有时，页脚锚点是第二把，
+    常见路径是最后一把 —— 而**只要页面声明过**就不猜路径：猜中的可能是另一个栏目
+    的源，且一次失败的主页不该再付四发请求。三条候选是上限，不是起点。
+    """
+    declared = _discover_feed_links(html, url)
+    if declared:
+        return (declared + _discover_feed_anchors(html, url))[:3]
+    anchors = _discover_feed_anchors(html, url)
+    common = _common_feed_candidates(url)
+    return (anchors + common)[:3]
+
+
 def _looks_like_html(body: bytes) -> bool:
     head = body[:600].lstrip().lower()
     return head.startswith(b"<!doctype html") or head.startswith(b"<html") or b"<html" in head
@@ -599,8 +681,11 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
 
     一条其实是网页的 URL 不是死路：页面会用
     ``<link rel="alternate" type="application/rss+xml">`` 声明自己的 feed，于是顺着
-    它走（最多两个候选），并带着 ``discovered_from`` 交回。这就是"对首页调 feed_read 报错"
-    与"它回答了调用方真正问的问题"之间的差别。
+    它走；声明标签一个都没有的页面（常见于自托管博客与地方媒体），再试页脚的
+    RSS/Atom 锚点，静默首页最后试 ``/feed``、``/rss.xml`` 一类常见路径 —— 三条候选
+    封顶，成功即停，并带着 ``discovered_from`` 交回。这就是"对首页调 feed_read 报错"
+    与"它回答了调用方真正问的问题"之间的差别。失败时错误句点名**试过哪些地址**，
+    而不是把一次探测写成"这不是 feed"。
 
     交回一个 FeedResult，装着已经解析出来的条目；抓取失败时 error 字段带着原因、items
     为空。
@@ -648,15 +733,20 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
     if parsed is not None and parsed.items:
         return _with_retry_note(_shape(parsed), retry_note)
 
-    # 不是 feed（或是一份我们读不懂的 feed）：试试页面自己说了什么。
+    # 不是 feed（或是一份我们读不懂的 feed）：试试页面自己说了什么 —— 声明的
+    # <link> 优先，其次是页脚锚点与常见路径（只对静默首页），见 `_feed_probe_order`。
     is_html = _looks_like_html(body)
-    candidates = _discover_feed_links(raw, url) if is_html or parse_exc is not None else []
-    for candidate in candidates[:2]:
+    candidates = (_feed_probe_order(raw, url)
+                  if is_html or parse_exc is not None else [])
+    tried: list[str] = []
+    for candidate in candidates:
         try:
             feed_url = validate_url(candidate)
         except SecurityError as se:
             logger.debug("discovered feed target refused: %s", str(se)[:120])
+            tried.append(candidate)
             continue
+        tried.append(feed_url)
         cbody, _cst, cenc, cerr, _chdrs, cnote = await _grab_with_retry(feed_url, timeout)
         if cerr and not cbody:
             continue
@@ -676,9 +766,9 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
         return _with_retry_note(_shape(parsed), retry_note)
 
     error = _friendly_parse_error(parse_exc, raw, is_html)
-    if candidates:
-        error += (" The page advertises feed candidate(s): "
-                  + ", ".join(candidates[:3]) + " - none of them parsed.")
+    if tried:
+        error += (" Tried " + ", ".join(tried[:3])
+                  + " - none of them parsed as a feed.")
     return FeedResult(source_url=url, error=error)
 
 

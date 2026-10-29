@@ -183,6 +183,10 @@ def _yield_line(verdict: str, row: dict, nodes: int, usable: int) -> str:
     if verdict in ("parser_drift", "parser_suspect"):
         return (f"{label} ({nodes} item nodes, {usable} usable)"
                 f" {'[confirmed]' if verdict == 'parser_drift' else '[suspect]'}")
+    if verdict == "filtered_out":
+        raw = int(_row_float(row, "last_raw", -1))
+        return (f"{label} ({nodes} item nodes, {max(raw, 0)} usable before its "
+                "own filter, 0 after)")
     if verdict == "not_instrumented":
         return f"{max(usable, 0)} results"
     if verdict == "upstream_empty":
@@ -243,7 +247,8 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
             usable = int(_row_float(st, "last", -1))
             verdict = engine_yield.classify_yield(
                 st, str(st.get("status", "")), nodes, usable, now=now)
-            suspect = suspect or verdict in ("parser_drift", "parser_suspect")
+            suspect = suspect or verdict in ("parser_drift", "parser_suspect",
+                                             "filtered_out")
             parts.append(f"{name}: {_yield_line(verdict, st, nodes, usable)}")
         if retired:
             parts.append(f"(+{len(retired)} record(s) from backends 17.0 deleted)")

@@ -4825,6 +4825,9 @@ _SS_PARAMS = frozenset({
     # #8 共识感知扇出：只作用于 fetch_content 的自动取正文，是"够不够独立佐证"
     # 的地板（不是第三个相关性排序旋钮）。
     "fetch_min_consensus",
+    # 2026-10-29：`terse=true` 丢掉逐引擎/逐竖源的尸检（engine_detail /
+    # source_detail），保留行、四个桶、共识、日期与两句行动建议。默认全量。
+    "terse",
 })
 # 每个工具在顶层接受的**完整**名字集合。`url=` 这一类不在 *_PARAMS 里
 # （web_crawl 的 focus、web_act 的 session_id、web_search 的 query），它们是各
@@ -11149,6 +11152,7 @@ class MasterFetchServer:
         fetch_min_consensus: int = 0,
         min_relevance: float = 0.0,
         min_raw_relevance: float = 0.0,
+        terse: bool = False,
     ) -> SearchResponseModel:
         """Local keyless web search (no API key, no account, no third-party service).
 
@@ -11231,6 +11235,7 @@ class MasterFetchServer:
                 page=page, freshness=freshness, after=after, before=before,
                 min_relevance=min_relevance,
                 min_raw_relevance=min_raw_relevance,
+                terse=terse,
             )
         except Exception as e:
             # An unexpected raise used to reach the caller as a bare Python
@@ -12459,6 +12464,7 @@ class MasterFetchServer:
                     "fetch_min_consensus": {"type": "integer", "description": "fetch_content only: keep only hits corroborated by >= N independent index families (min 2; 0 = off). Skipped URLs are in consensus_skipped."},
                     "min_relevance": {"type": "number", "description": "0-1 cutoff on the NORMALIZED rerank score. Below it results are dropped, not re-ordered."},
                     "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score - the one that can call a whole round irrelevant. fetch_hint reports the raw span."},
+                    "terse": {"type": "boolean", "description": "Drop engine_detail/source_detail (the per-backend WHY) and keep rows, the four bucket lists, consensus, dates, fetch_hint, summary and next_action. The buckets still say WHO did not contribute. Default false - read engine_detail when a degraded pool needs diagnosis."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},

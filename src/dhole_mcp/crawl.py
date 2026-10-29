@@ -211,7 +211,7 @@ class CrawlResponseModel(RefusalHandle):
     truncated_by_max_pages: bool = Field(default=False, description="True = stopped early because max_pages was reached.")
     truncated_by_time: bool = Field(default=False, description="True = stopped early because the overall deadline (ms) was reached.")
     deadline_ms_applied: int = Field(default=0, description="The whole-call time budget THIS run was held to, in ms: the `deadline_ms=` you named, or this tool's own cap when you named none. It is NOT `timeout=` - that one bounds ONE HTTP attempt, and the two units were confused often enough to need the number. 0/absent = the call never reached the crawl loop (a refusal, or a run that errored before the first round).")
-    budget_overrun_ms: int = Field(default=0, description="Milliseconds this run took OVER `deadline_ms_applied` while still shipping every row it had. Non-zero = the call outlived its own time budget WITHOUT being cut short: the loop reads the clock between rounds, so a fetch already in flight is allowed to finish (a deliberate choice - killing it would throw away a completed download). 0/absent = the run finished inside its budget. `truncated_by_time=true` is a different event (rows held back); when both appear, the truncation sentence carries the count and this number carries the cost.")
+    budget_overrun_ms: int = Field(default=0, description="Milliseconds this run took OVER `deadline_ms_applied` while still shipping every row it had. Non-zero = the call outlived its own time budget WITHOUT being cut short: in-flight fetches are cancelled at the deadline (a short cleanup grace absorbs socket/browser teardown), so a non-zero number here is that teardown tail, not a whole extra HTTP attempt. 0/absent = the run finished inside its budget. `truncated_by_time=true` is a different event (rows held back); when both appear, the truncation sentence carries the count and this number carries the cost.")
     attempt_cap_ms: int = Field(default=0, description="Milliseconds ONE HTTP attempt was given on this run (the `timeout=` figure, or this tool's own default when none was named). It is the unit that `budget_overrun_ms` and `duration_ms` are NOT measured in: a run longer than this number did not ignore anything - it made more attempts, or a slower round. 0/absent = this path cannot name one (a map built without per-attempt caps).")
 
     truncated_by_total_chars: bool = Field(default=False, description="True = stopped early because the whole-run character budget (max_total_chars) was spent. The summary names how many pages were still queued and how many were fetched inside the last batch but not returned. In map mode it means the opposite of a page being dropped for being worthless: the rows were in hand and only their BYTES cost too much, so plan_id / next_resume_token carry the rest.")
@@ -1810,12 +1810,43 @@ async def web_crawl(
         if wait_s > 0:
             await asyncio.sleep(wait_s)
 
+    # 在飞请求的收尾宽限：到点取消一个 coroutine 之后，HTTP 栈与浏览器栈把连接放回
+    # 池子还要一点时间。它只吸收这段收尾，不吸收一次新的等待 —— 所以它是 `deadline_ms`
+    # 的**误差上界**，不是它旁边又开的一扇预算。
+    _IN_FLIGHT_GRACE_S = 0.25
+
     async def fetch_one(u: str) -> tuple[str, "object", str]:
         """把一页抓成 HTML。返回 (url, ResponseModel, html_str)。
 
         暂时性错误（timeout、connection_reset）隔 1s 自动重试一次。确定性错误
         （connection_refused、dns_failure、dns_unresolvable）不重试（再试还会失败）。
+
+        整趟预算在这里生效（2026-10-29）：`deadline_ms` 名义上是 hard stop，但从前的
+        检查只在批次边界 —— 一批里最慢的那一发把整个 `timeout=`（默认 30s）跑满才算
+        完，于是 25s 的爬取实测跑出 44.9s，宿主 30s 先砍连接、什么都回不来。现在每一页
+        的抓取本身被剩余预算（＋收尾宽限）包住：到点取消的是**这一页**，不是整趟。
+        已经抓完的页照旧交回；被取消的这一页与从没发出去的那一页在回执里仍分开计
+        （`dropped_after_answering` vs `pages_discovered - pages_crawled`）。
         """
+        _left_s = deadline_t - time()
+        if _left_s <= 0:
+            from dhole_mcp.server import ResponseModel
+            return u, ResponseModel(
+                url=u, status=-1, content=[""],
+                error=("deadline_ms: the whole-call time budget was already spent "
+                       "when this page's turn came, so it was never requested")), ""
+        try:
+            return await asyncio.wait_for(
+                _fetch_one_uncapped(u), timeout=_left_s + _IN_FLIGHT_GRACE_S)
+        except (asyncio.TimeoutError, TimeoutError):
+            from dhole_mcp.server import ResponseModel
+            return u, ResponseModel(
+                url=u, status=-1, content=[""],
+                error=("deadline_ms: the whole-call time budget ran out while this "
+                       "fetch was in flight - the request was made, and the answer "
+                       "was abandoned rather than allowed to overrun the deadline")), ""
+
+    async def _fetch_one_uncapped(u: str) -> tuple[str, "object", str]:
         async with sem:
             await _pace(u)
             # 17.0: 代理池删了，页面抓取不再"每页换一个 IP"；出口由 cred_defaults
@@ -2406,9 +2437,9 @@ def _time_budget_reading(t0: float, deadline_ms: int, attempt_ms: int = 0) -> tu
     if overrun > 0:
         words += (
             f" · the run outlived its whole-call budget by {overrun:,}ms "
-            f"(deadline_ms={applied:,} is what bounds the run, and the clock is read "
-            "between rounds, so a fetch already in flight finishes rather than being "
-            "thrown away)")
+            f"(deadline_ms={applied:,} is what bounds the run, and in-flight fetches "
+            "are cancelled at that point; the leftover is socket/browser teardown, "
+            "not another wait)")
     if cap > 0 and dur_ms > cap:
         words += (
             f" · the {dur_ms:,.0f}ms this call took is NOT what `timeout=` was "

@@ -2080,7 +2080,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "An empty answer that fast is the shape of that proxy speaking for a "
                 "target it could not reach - nothing here proves the site itself "
                 "returned this status, so the site is NOT established as down. "
-                "Tell them apart: ask the same URL where no proxy is configured, or "
+                "Retry once after a pause; if it persists, tell the two apart: ask "
+                "the same URL where no proxy is configured, or "
                 "read the proxy's own log for this request. dhole inherits an "
                 "OS-level proxy and has no per-call switch for it; a proxy stored "
                 "with cred_defaults does have one (cred_defaults(unset=[\"proxy\"])). "
@@ -2421,6 +2422,11 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     ("invalid_request", "invalid_request", False, "fix the named argument"),
     ("schema validation error", "schema_validation_error", False, "fix the schema= / the page's markup"),
     ("timeout", "timeout", True, "raise timeout, or switch source"),
+    # 整趟预算（`deadline_ms`）把这一页放下，而不是一次 HTTP 尝试超时：两种"时间用完了"
+    # 的修法相反 —— 前者要抬整趟的钟或从游标续，后者才是抬 `timeout=`。
+    ("deadline_ms", "deadline_ms", True,
+     "raise deadline_ms= for the whole run (timeout= bounds ONE HTTP attempt), or "
+     "continue from the returned resume cursor"),
     ("File not found", "file_not_found", False,
      "name a file that exists - `error` says where this call looked and what could still "
      "change the answer"),

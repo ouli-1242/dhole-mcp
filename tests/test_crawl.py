@@ -483,6 +483,8 @@ VALUES: dict[str, object] = {
     "before": "2026-01-01", "url": URL, "fetch_content": True,
     "fetch_schema": {"properties": {"t": {"selector": "p"}}},
     "min_relevance": 0.2, "min_raw_relevance": 0.1,
+    # terse 的探针值取 True：默认是 False，丢了才分辨得出是丢了。
+    "terse": True,
     # P0 纵向搜索：两颗都在 web_search 上。sources 取一个纵向池而不是默认
     # ['web']，sort 取非默认值，丢了才分辨得出是丢了。
     "sources": ["academic"], "sort": "newest",

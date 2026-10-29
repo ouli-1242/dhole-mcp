@@ -6,6 +6,30 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [17.6] - 2026-10-29
+
+搜索回执的可信度与内容链路的边界：修掉一批「看起来成功、判词却与事实相反」的格子，并给批量搜索一颗可选的省字开关。
+
+### 新增
+
+- **`web_search(terse=true)`**：按需省略逐引擎 / 逐竖源的尸检（`engine_detail` / `source_detail`），保留结果行、四个桶、`families_answered_of_asked`、`consensus_basis`、日期账、`fetch_hint`、`summary` 与 `next_action`。实测一条 3 行搜索约 5KB → 2.4KB；默认仍是全量，池子降级需要分诊时那份「谁为什么没答」一个字不少。CLI 同步 `dhole search --terse`。
+
+- **`filtered_out` 产出判决**：引擎自滤前有可用行、自滤后 0 行，不再和「解析器没取出东西」共用 `parser_drift`——前者修过滤器（ads / 自站链接 / 跳转包装），后者修 xpath。`sys_state(show=["engine_state"])` 新增 `last_raw`（自滤前可用行数）作为这笔账的原料。
+
+### 修复
+
+- **crawl 的 `deadline_ms` 真正是硬截止**：此前时钟只在批次边界读，一批里最慢的那一发把整个 `timeout=`（默认 30s）跑满才算完——25s 预算实测跑出 44.9s，宿主 30s 先砍连接、什么都回不来。现在每一页的抓取被剩余预算（＋ 250ms 收尾宽限）包住：到点取消这一页，已完成的行照旧交回；`budget_overrun_ms` 只剩 socket / 浏览器收尾的那点尾巴。
+
+- **baidu B 版面不再被报成 `parser_drift`**：B 版的真链藏在 `data-log` 的 JSON 里，旧计数在引擎自滤**之前**按「href 是不是 http(s)」数，于是一整版健康结果被记成 `(6, 0)`。现在可用行数在自滤之后重记，真机同一查询从 `parser_drift · 0 usable` 变成 `healthy · 8 usable rows from 13 item nodes`。
+
+- **`feed_read` 对不写 `<link rel=alternate>` 的首页也能找到 feed**：声明标签优先；没有声明时试页脚的同源 RSS/Atom 锚点；静默首页最后试 `/feed`、`/rss.xml` 等常见路径，三发封顶、成功即停。失败句点名试过哪些地址，而不是只说「这不是 feed」。
+
+- **0 结果的搜索不再解释「为什么挖不出后续词」**：没有行可挖时，那段约 430 字符的分词器自述不再出现；有行但被话题 / 农场闸筛光的回合仍保留解释（那一格的空是另一件事）。
+
+- **诊断与建议恢复一致**：新增 `deadline_ms` 诊断码（整趟预算用完与一次 HTTP 尝试超时是两颗不同的旋钮）；存了代理的机器上，5xx 的 `next_action` 不再把 `retryable=true` 说成不可重试。
+
+钉 `tests/test_a_crawl_stops_at_its_deadline_even_mid_fetch.py`、`tests/test_a_homepage_that_declares_no_feed_still_gets_one.py`、`tests/test_a_zero_result_round_does_not_explain_an_absent_suggestion.py`、`tests/test_terse_search_keeps_the_levers_drops_the_autopsy.py`、`tests/test_baidu_layout_b_is_not_called_parser_drift.py`、`tests/test_every_engine_fixture_counts_what_it_delivers.py` 与 `tests/test_engine_yield.py` 的新判决用例；全量非 e2e/live 回归通过（23 条 skip）。
+
 ## [17.5] - 2026-10-28
 
 CLI 从「只有运维面」补成一扇完整的门：13 条内容命令与 13 颗工具一一对应，不开宿主也能拿内容；同批收入 17.3 之后的浏览器持久 profile、连接期瘦身与磁盘回收。
@@ -877,6 +901,8 @@ agent 技能随包分发；修掉「代理环境下抓不了本机服务」这�
 ### 修复
 
 - **日志凭据泄漏**：重试时会把含 `user:pass@` 的代理 URL 写进日志。
+
+[17.6]: https://github.com/ouli-1242/dhole-mcp/compare/v17.5...v17.6
 
 [17.5]: https://github.com/ouli-1242/dhole-mcp/compare/v17.3...v17.5
 

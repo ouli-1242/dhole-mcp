@@ -570,7 +570,7 @@ class SearchResponseModel(RefusalHandle):
     # name/family/status 是上游 metasearch 的原始状态 token，verdict 是 engine_yield 那把
     # 阶梯交的，why 是引擎层已经写好的那句（冷却还剩几秒 / HTTP 几几几 / 被谁取消 /
     # 页面有容器而解析出 0 条）。它们此前只活在这个进程里，从未上过线。
-    engine_detail: list[dict] = Field(default=[], description="Per-engine account of THIS round, one row per engine the pool asked: {name, family, status, verdict, why}. `status` is the raw upstream token (ok / empty / blocked / circuit_open / timeout / error:.. / init_error:.. / no_key:.. / preempted); `family` is the index family that engine sits on (bing, bing_global and duckduckgo all share the bing index, so three engines can be one family); `verdict` is the pool's own yield verdict for this round (healthy / blocked / not_asked / parser_drift / parser_suspect / upstream_empty / unknown_empty / timeout / unreachable / not_instrumented / stale); `why` names the concrete reason for THAT row this round - the seconds left on a cooldown, the HTTP code that ate the page, the 8 result containers that parsed into 0 usable rows. The four bucket lists (engines_used / engine_blocked / engine_empty / engine_preempted) stay the vocabulary for WHO; this says WHY, because blocked / cancelled / region-gated / parser-broken have mutually exclusive fixes.")
+    engine_detail: list[dict] = Field(default=[], description="Per-engine account of THIS round, one row per engine the pool asked: {name, family, status, verdict, why}. `status` is the raw upstream token (ok / empty / blocked / circuit_open / timeout / error:.. / init_error:.. / no_key:.. / preempted); `family` is the index family that engine sits on (bing, bing_global and duckduckgo all share the bing index, so three engines can be one family); `verdict` is the pool's own yield verdict for this round (healthy / blocked / not_asked / parser_drift / parser_suspect / filtered_out / upstream_empty / unknown_empty / timeout / unreachable / not_instrumented / stale); `why` names the concrete reason for THAT row this round - the seconds left on a cooldown, the HTTP code that ate the page, the 8 result containers that parsed into 0 usable rows (`filtered_out` instead names how many usable rows the engine's OWN post-filter dropped, because that repair is not a parser fix). The four bucket lists (engines_used / engine_blocked / engine_empty / engine_preempted) stay the vocabulary for WHO; this says WHY, because blocked / cancelled / region-gated / parser-broken have mutually exclusive fixes.")
     sources_used: list[str] = Field(default=[], description="Vertical backends that returned at least one candidate row this round: arxiv | crossref | gdelt | stackexchange | github | github_repo | hackernews | npm | pypi | crates | go. A backend listed here may still have delivered 0 rows to `results` - read `delivered` in source_detail for that. Empty = no vertical source was asked, or every one of them returned nothing. These are NOT web index families and never contribute to engines_consensus.")
     source_detail: list[dict] = Field(default=[], description="One row per vertical source this call asked, whether it answered or not: {source, backend, status, count, delivered, duration_ms, error?}. source is the kind you named (news|academic|qa|code|community|package|repo), backend is the concrete API (gdelt|arxiv|crossref|stackexchange|github|github_repo|hackernews|npm|pypi|crates|go), status is ok|empty|not_found|bad_query|blocked|timeout|error. `count` is candidate rows left AFTER the site/exact-date filters (before the max_results cap); `delivered` is how many of them are in this response's `results`. A source that returned nothing still has a row here - 'I asked and it was empty' must not look like 'I never asked'.")
     sort_applied: str = Field(default="", description="relevance|newest. Empty = the default relevance order. 'newest' orders rows that state a publish day newest-first; rows with no usable date keep their relative order after every dated row. Read this when the order looks unlike relevance - it is a caller choice, not a ranking change.")
@@ -608,6 +608,23 @@ class SearchResponseModel(RefusalHandle):
 # ─── 域名分组（分类器只有一份，在 envelope.classify_source）
 # 体验修复刀2-S6：这里原本养着第二套域名表与第二个分类器（`_source_type`）。合并后搜索行与抓取行
 # 共用 envelope.classify_source 一套词表；这里只留下它的一件事：把一个 URL 归到可比较的主机。
+
+def _terse_response(resp: SearchResponseModel) -> SearchResponseModel:
+    """`terse=true`：交回可行动的那一半，丢掉逐后端尸检。
+
+    丢掉的是 `engine_detail` / `source_detail` —— 每家引擎/竖源一行，带着原始状态
+    token、冷却剩余秒数、解析出几条。留下的是调用方真正下手的东西：结果行、四个桶的
+    名单、家族计数、`consensus_basis`、日期账、`fetch_hint`、`summary`、`next_action`。
+    四个桶仍然说得出**谁**没贡献；被省略的只有逐家的**为什么**。
+
+    为什么默认不丢：三种"没贡献"的修法互斥（冷却/解析器漂移/这个索引真没有），而
+    `engine_detail` 是响应面上唯一分得开它们的地方。它是一颗 opt-in：常跑批量搜索、
+    只要链接的调用方可以按需省掉这 1-2KB，而不是让所有人为它付费。
+    """
+    resp.engine_detail = []
+    resp.source_detail = []
+    return resp
+
 
 def _get_domain(url: str) -> str:
     """从 URL 提取可注册域名（为分组去掉 www. 与子域）。"""
@@ -2060,7 +2077,8 @@ def _engine_detail_rows(reports: list[EngineReport]) -> list[dict]:
             "family": _INDEX_FAMILY.get(r.name, r.name),
             "status": r.status,
             "verdict": verdict,
-            "why": engine_yield.explain(verdict, r.item_nodes, r.usable, r.error),
+            "why": engine_yield.explain(verdict, r.item_nodes, r.usable, r.error,
+                                        raw=r.raw_usable),
         })
     return rows
 
@@ -2953,6 +2971,7 @@ async def web_search(
     before: Optional[str] = None,
     min_relevance: float = 0.0,
     min_raw_relevance: float = 0.0,
+    terse: bool = False,
 ) -> SearchResponseModel:
     """本地免密网页搜索（无 API key、无账号）。默认池
     （baidu、bing、sogou、so360、bing_global、yahoo、yandex、brave、duckduckgo、
@@ -3251,7 +3270,7 @@ async def web_search(
                 _replay_ledger = (serp_dates.describe_ledger(
                     data.get("date_coverage", {}) or {}, cutoff.isoformat())
                     if cutoff is not None else "")
-                return SearchResponseModel(
+                _resp = SearchResponseModel(
                     query=cache_query, results=results_list,
                     total_results=len(results_list), cached=True,
                     **_asked_pair(max_results, len(results_list)),
@@ -3301,6 +3320,7 @@ async def web_search(
                         engine_detail=data.get("engine_detail", []) or [],
                         rerank_mode=_rm, replay=True), _replay_ledger),
                 )
+                return _terse_response(_resp) if terse else _resp
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.warning(f"Corrupt search cache for '{cache_query[:50]}': {e}")
 
@@ -3433,7 +3453,7 @@ async def web_search(
         _sim_stats: dict = {}
         sim_related = _related_queries(derived_query, results_list, stats=_sim_stats)
         _sim_cause = _follow_up_cause(_sim_stats, sim_related)
-        if _sim_cause:
+        if _sim_cause and ranked:
             fetch_hint = _hint_with(fetch_hint, _sim_cause)
         if min_relevance > 0.0 or min_raw_relevance > 0.0:
             # 说出口，而不是让参数静默失效：这个模式是按**源页**给候选打分、尺度
@@ -3759,7 +3779,16 @@ async def web_search(
     if _notes:
         fetch_hint = _hint_with(fetch_hint, _notes)
     _main_cause = _follow_up_cause(_main_stats, main_related)
-    if _main_cause:
+    # 零结果的一轮不解释"为什么挖不出后续词"：没有行可挖，那句话只会用 400 个字符
+    # 告诉读者一个不可能有答案的问题，而这一轮真正的出路（池子没答）已经在
+    # error/next_action 里。2026-10-29 实测那条 2.8KB 的 0 结果响应，其中约 430
+    # 字符就是这段自述。
+    #
+    # 判据用 `_delivered`（建行之后、内容闸之前）而不是 `results_list`：行有、但被
+    # 话题/农场闸全部丢掉的回合仍然欠一句解释 —— 那一轮 `related_queries` 是空的，
+    # 而"空是因为没有行可挖"与"空是因为行被筛光了"是两件事（既有契约
+    # test_a_round_with_nothing_cuttable_speaks_on_the_hint 钉的就是后一件）。
+    if _main_cause and _delivered:
         fetch_hint = _hint_with(fetch_hint, _main_cause)
     # _clamp_note 刻意**不**并进 fetch_hint：见 _search_summary。它随 `summary` 走，
     # 而 web_read 与 web_crawl 早已在同一处说同样的话。
@@ -3828,7 +3857,7 @@ async def web_search(
         await set_cached(cache_query, cache_type, [cache_data], 200, None, _round_ttl,
                          scope="search")
 
-    return SearchResponseModel(
+    _resp = SearchResponseModel(
         query=cache_query, results=results_list, total_results=len(results_list),
         **_asked_pair(max_results, len(results_list)),
         engines_used=engines_used, engine_blocked=engine_blocked,
@@ -3860,3 +3889,4 @@ async def web_search(
             engine_detail=_detail,
             rerank_mode=rerank_used), _date_ledger_line),
     )
+    return _terse_response(_resp) if terse else _resp

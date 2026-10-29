@@ -33,8 +33,8 @@ YIELD_TTL_S = 3600.0           # 超过这个时间没再跑过搜索，上一�
 #: 都必须覆盖这一整批：少一格不是少一句短语，而是那一轮的失败在两个读处同时隐形。
 VERDICTS = frozenset({
     "not_asked", "blocked", "timeout", "unreachable", "not_instrumented",
-    "parser_drift", "parser_suspect", "upstream_empty", "unknown_empty",
-    "healthy", "stale",
+    "parser_drift", "parser_suspect", "filtered_out", "upstream_empty",
+    "unknown_empty", "healthy", "stale",
 })
 
 #: 这颗 token 意味着什么 —— 一句、不带数。数由调用方补（响应带本轮的容器数/可用数，
@@ -51,6 +51,10 @@ VERDICT_WHY: Dict[str, str] = {
                     "rows out of them, on consecutive rounds",
     "parser_suspect": "its page carried result containers and the parser took 0 usable "
                       "rows out of them (first round seeing this)",
+    "filtered_out": "its page carried result containers and the parser DID take usable "
+                    "rows out of them, but the engine's own post-filter dropped every "
+                    "one (ads / self-links / redirect wrappers) - a filter problem, not "
+                    "a parser problem",
     "upstream_empty": "its page held no result containers at all, though this engine "
                       "normally yields some",
     "unknown_empty": "its page held no result containers and there is no baseline to "
@@ -71,6 +75,7 @@ VERDICT_CLI_LABEL: Dict[str, str] = {
     "not_instrumented": "results",
     "parser_drift": "PARSER BROKEN",
     "parser_suspect": "PARSER BROKEN",
+    "filtered_out": "filter dropped all",
     "upstream_empty": "0 nodes",
     "unknown_empty": "0 this query",
     "healthy": "ok",
@@ -102,6 +107,8 @@ def classify_yield(stats: Dict[str, Any], status: str, nodes: int, usable: int,
     if nodes < 0:
         return "not_instrumented"   # JSON API 引擎，或这轮没走到解析
     if nodes > 0 and usable == 0:
+        if _as_int(stats.get("last_raw"), -1) > 0:
+            return "filtered_out"
         return ("parser_drift" if _as_int(stats.get("drift"), 0) >= DRIFT_STREAK
                 else "parser_suspect")
     if nodes == 0 and usable == 0:
@@ -120,14 +127,22 @@ def why_for(verdict: str) -> str:
     return text
 
 
-def explain(verdict: str, nodes: int, usable: int, error: str = "") -> str:
+def explain(verdict: str, nodes: int, usable: int, error: str = "",
+            raw: int = -1) -> str:
     """把 token 与本轮的观测数合成 `engine_detail[].why` 那一句。
 
     顺序是刻意的：解析不出东西那一格**必须**把容器数与可用数带出来 —— 没有那两个数，
     "解析器坏了"与"这个查询真没结果"在响应上又同形了，而分开它们正是这一族判据存在的
-    理由。其余情况先交引擎层已经写好的原因串（冷却还剩几秒、HTTP 几几几、被谁取消都
+    理由。`filtered_out` 还要把自滤前的可用数（`raw`）带出来：它证明解析器取到了行，
+    丢掉它们的是后处理，修法完全不同。
+
+    其余情况先交引擎层已经写好的原因串（冷却还剩几秒、HTTP 几几几、被谁取消都
     写在里面），谁都不许再抄写第二遍。
     """
+    if verdict == "filtered_out":
+        return (f"{nodes} result containers; {max(raw, 0)} had a usable link/title "
+                f"before the engine's own filter, 0 survived it "
+                f"({why_for(verdict)})")
     if verdict in ("parser_drift", "parser_suspect"):
         return (f"{nodes} result containers on its page, {usable} usable rows parsed"
                 f" ({why_for(verdict)})")

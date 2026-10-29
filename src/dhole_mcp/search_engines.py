@@ -303,6 +303,9 @@ class EngineReport:
     # 后者再打一轮只是给同一个坏掉的解析器重复加压。-1 = 没观测。
     item_nodes: int = -1
     usable: int = -1
+    #: 引擎自滤之前、href/title 都成立的行数。与 usable 一起才分得清"解析器没取出"
+    #: （raw=0）与"后处理把可用行全丢了"（raw>0、usable=0）。-1 = 没观测。
+    raw_usable: int = -1
     yield_verdict: str = ""
 
 
@@ -531,6 +534,7 @@ async def multi_search(
             "status": st,
             "item_nodes": _y("last_nodes", -1),
             "usable": _y("last", -1),
+            "raw_usable": _y("last_raw", -1),
             "yield_verdict": str(y.get("verdict", "") or ""),
         }
         if st == "ok":

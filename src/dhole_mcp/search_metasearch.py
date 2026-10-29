@@ -428,6 +428,11 @@ class BaseSearchEngine:
     # 父类且不调 super()，写在 __init__ 里的话最常用的一些引擎会没有这些字段。
     # -1 / None = 没走到那一步（未解析、被跳过、或该引擎根本不吃 HTML）。
     last_extract: tuple[int, int] = (-1, -1)
+    #: 引擎自己的后处理**之前**可用行数（href/title/http(s) 都成立）。与 `last_extract`
+    #: 的第二个数一起，才分得清"解析器没取出"（raw=0）与"后处理把可用行全丢了"
+    #: （raw>0、post=0）—— 两种故障的修法不同，而旧计数把它们合成同一个 parser_drift。
+    #: -1 = 没观测（未解析、被拦、JSON API 后端或旧版落盘行）。
+    last_raw_usable: int = -1
     kept_after_filter: int = -1
     http_status: int | None = None
 
@@ -513,7 +518,9 @@ class BaseSearchEngine:
             results.append(result)
         # item_nodes>0 而 usable==0 = 容器还在、子元素 xpath 已经错位 —— 这就是
         # 解析器漂移，且它不需要任何历史基线就能判定。
-        self.last_extract = (len(nodes), _usable_count(results))
+        raw_usable = _usable_count(results)
+        self.last_raw_usable = raw_usable
+        self.last_extract = (len(nodes), raw_usable)
         return results
 
     def post_extract_results(self, results: list[Any]) -> list[Any]:
@@ -528,11 +535,19 @@ class BaseSearchEngine:
         （它为了重试挑战页自己调 request，不走 super）都从这一个出口出去。日期只有
         一个作者、一次判决，且发生在引擎自滤之后 —— 被丢掉的本就不该出现在账上。
 
+        `last_extract` 的可用行数也在**自滤之后**重记一次（2026-10-29）：引擎自己的
+        `post_extract_results` 会把版面里的中间形状解成最终 href —— baidu B 版的
+        `data-log` JSON 正是这样 —— 在那之前按"href 是不是 http(s)"数，一整版健康的
+        B 版结果会被记成 `(6, 0)`，于是引擎被报成 parser_drift，而它明明交回了 6 行。
+        原始解析的那次计数仍由 `extract_results` 留给直接读它的调用方。
+
         xpath 只负责把版面那段字**取回来**；把它读成 (日期, 精度, 原文) 的是
         `serp_dates.read_row`，那里是唯一的一份解析（4.0 的叶子）。
         """
-        return [_stamp_row_date(r) for r in
-                (self.post_extract_results(self.extract_results(html_text)) or [])]
+        results = self.post_extract_results(self.extract_results(html_text)) or []
+        containers = self.last_extract[0]
+        self.last_extract = (containers, _usable_count(results))
+        return [_stamp_row_date(r) for r in results]
 
     def _check_challenge(self, html_text: str) -> None:
         """解析前调用：几 KB 的 200 校验页 = 被拦，不是"没有结果"。
@@ -578,9 +593,10 @@ class BaseSearchEngine:
         if self._detect_challenge_shell:
             self._check_challenge(html_text)
         kept = self.extract_kept(html_text)
-        # 记的是条数而非可用数：usable 已由 last_extract 承载。两者分开才能分出
-        # "解析器坏了"（usable==0）与"过滤器把结果吃光了"（bing 的 ck/a、ddg 的
-        # y.js）—— 前者要修 xpath，后者要修解码，是两类不同的故障。
+        # 记的是**自滤之后**的行数而非可用数：usable 由 last_extract 承载。两者分开
+        # 才说得出"行交回了、但其中有些 href/title 不完整"（kept > usable）；而
+        # kept==0 时"过滤器把结果吃光了"与"解析器没取出东西"在现有计数下仍然同形 ——
+        # 判词不替它们编一个不存在的区别（要分开得另存自滤前的可用数）。
         self.kept_after_filter = len(kept)
         return kept
 
@@ -2241,6 +2257,7 @@ def _record_engine_outcomes(status: dict[str, str],
             eng = instances.get(name)
             nodes, usable = getattr(eng, "last_extract", (-1, -1)) if eng else (-1, -1)
             kept = getattr(eng, "kept_after_filter", -1) if eng else -1
+            raw = getattr(eng, "last_raw_usable", -1) if eng else -1
             st_dict = _ENGINE_YIELD.setdefault(name, {})
             n = int(st_dict.get("n", 0)) + 1
             observed = st != "preempted" and nodes >= 0
@@ -2249,7 +2266,11 @@ def _record_engine_outcomes(status: dict[str, str],
                 mean = float(usable) if n <= 1 else mean * (1 - _YIELD_EWMA) + usable * _YIELD_EWMA
             drift = int(st_dict.get("drift", 0))
             if nodes > 0 and usable == 0:
-                drift += 1
+                if raw > 0:
+                    # 自滤前有可用行、自滤后 0 行：后处理把它们全丢了，不是解析器漂移。
+                    drift = 0
+                else:
+                    drift += 1
             elif nodes >= 0:
                 drift = 0
             zero = int(st_dict.get("zero", 0))
@@ -2262,6 +2283,7 @@ def _record_engine_outcomes(status: dict[str, str],
                 "mean": round(mean, 2),
                 "last": int(usable),
                 "last_nodes": int(nodes),
+                "last_raw": int(raw),
                 "last_kept": int(kept),
                 "zero": int(zero),
                 "drift": int(drift),

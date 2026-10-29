@@ -277,6 +277,8 @@ _SEARCH_FLAGS = (
          "0-1 floor on the raw reranker score", metavar="F"),
     Flag("--fetch-min-consensus", "fetch_min_consensus", "int",
          "keep fetched pages corroborated by N families", metavar="N"),
+    Flag("--terse", "terse", "bool",
+         "drop per-engine/source diagnostics; keep rows and levers"),
     Flag("--cache-ttl", "cache_ttl", "int",
          "cache seconds; 0 forces a fresh search", metavar="S"),
 )
