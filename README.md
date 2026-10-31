@@ -104,7 +104,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 | `web_read` | 抓任意 URL：反爬阶梯、PDF / OCR、批量、聚焦提取；产出正文、**字节**（`save_to`）或**证据**（状态行 / 响应头 / 302 链）；`check` 回答「这页变了吗」并附一份 unified diff |
 | `web_act` | 在页面上动手：点击、填写、**选下拉框**、按键、拖拽、滚动、截图、**上传文件**、**应答弹窗**、**多页签**、**历史后退**、**打印成 PDF**；提交默认暂停，等你点头 |
 | `web_request` | 发一次非 GET（POST / PUT / PATCH / DELETE / HEAD），只发一次：不重试、不缓存、不升浏览器 |
-| `web_search` | 10 个免密引擎并行 + 本地重排，可顺带抓回前三条全文；另开七类纵向源（新闻 / 论文（arXiv + Crossref）/ 问答 / 代码 / 社区 / 包元数据 / GitHub 仓库） |
+| `web_search` | 12 个免密引擎并行 + 本地重排，可顺带抓回前三条全文；另开八类纵向源（新闻 / 论文（arXiv + Crossref + OpenAlex）/ 问答 / 代码 / 社区 / 参考（Wikipedia）/ 包元数据 / GitHub 仓库） |
 | `web_research` | 一个问题，一次调用，一份带 `[n] URL` 引用的证据包；坏的源自己说明为什么，从不拖垮整包。`cross_check=true` 另交一份来源一致性报告（claim / 支持与反对域名 / `agreement_score`）——是一致性信号，不是事实核查 |
 | `web_recall` | 检索**本机读过的页**：零网络、零模型，回指针、摘录与过期标注 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树 |
@@ -126,7 +126,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 
 ## 它和别的抓取器不一样在哪
 
-- **零密钥**：12 个免密搜索引擎、七类纵向源、反爬升级、重排模型，没有一项需要注册或充值。可选的 `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` 只在你自己配了 key 并且点名时才调用。
+- **零密钥**：12 个免密搜索引擎、八类纵向源、反爬升级、重排模型，没有一项需要注册或充值。可选的 `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` / `google_cse` 只在你自己配了 key 并且点名时才调用（`google_cse` 另需一个 Programmable Search Engine ID）。
 - **零模型**：判断归外层 agent，dhole 只做确定的工具层。同一份页面两次抓取，同一个结果；不会有一个小模型在背后替你决定「这页大概讲什么」。
 - **全本地**：正文缓存、cookie、重排模型都在 `~/.dhole`；除了你让它抓的目标站点，进程不往外发任何数据。
 - **失败说真话**：每次调用都回同一份 JSON——抽了多少字、走的哪一档、下一步该调什么。抽空了就说空了，不会把一张反爬灰页包装成「成功正文」。
@@ -140,15 +140,15 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 | Brave Search | 8 | 110,719 | ~27.7k | API key，按量 |
 | Firecrawl | 28 | 94,937 | ~23.7k | credits |
 | Playwright（全开 caps） | 72 | 45,602 | ~11.4k | 免费 |
-| **dhole-mcp** | **13** | **33,612**（30,885 工具 + 2,727 说明书） | **~8.1k** | 免费 keyless |
+| **dhole-mcp** | **13** | **32,687**（29,920 工具 + 2,767 说明书） | **~7.9k** | 免费 keyless |
 | Playwright（默认） | 25 | 20,286 | ~5.1k | 免费 |
 | Tavily | 5 | 7,694 | ~1.9k | API key，按量 |
 | Exa（hosted，仅测 tools/list） | 2 | 2,419 | ~0.6k | keyless 有限额 |
 | Fetch（官方参考实现） | 1 | 1,150 | ~0.3k | 免费 |
 
-- 七个产品里**第 4 便宜**（不计 Exa 则第 3；Playwright 两档分开算则第 5），比 Brave / Firecrawl 这两个热门方案便宜 **2.9~3.3 倍**（字符比 3.35 与 2.87）。
+- 七个产品里**第 4 便宜**（不计 Exa 则第 3；Playwright 两档分开算则第 5），比 Brave / Firecrawl 这两个热门方案便宜 **2.8~3.3 倍**（字符比 3.27 与 2.80）。
 - **工具数少不等于描述省**：Brave 8 颗吃掉 27.7k（平均每颗 ~3.5k token），dhole 13 颗平均每颗 ~0.6k，覆盖 fetch / search / crawl / act / research / feed / PDF / recall / 本地文档。
-- 那 2,727 字符（≈656 token）的说明书是连接期唯一的用法导引；深度文档不进上下文，谁问谁付（`sys_guide` 或 `dhole skill install`）。裁到 `DHOLE_TOOLS=web_read,web_search` 时，connect 口径降到 11,664 字符（≈2.8k）。
+- 那 2,727 字符（≈656 token）的说明书是连接期唯一的用法导引；深度文档不进上下文，谁问谁付（`sys_guide` 或 `dhole skill install`）。裁到 `DHOLE_TOOLS=web_read,web_search` 时，connect 口径降到 11,964 字符（≈2.9k）。
 
 **变动成本**——同一个高密度文档页（`docs.python.org/3/library/asyncio-task.html`），一次调用拿回多少：
 
@@ -188,7 +188,8 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 | `DHOLE_SEARCH_ROW_FILTER` | `off` 关掉 SEO 农场行过滤（默认开） |
 | `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算，40000（500–200000） |
 | `DHOLE_BROWSER_IDLE_TIMEOUT` | 热浏览器闲置多少秒后关闭，默认 1800（30 分钟）；`0` = 永久保活（重启宿主生效） |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` / `DHOLE_FIRECRAWL_API_KEY` / `DHOLE_BRAVE_API_KEY` | 六颗 keyed 引擎的密钥，配了才启用、点名才调用 |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` / `DHOLE_FIRECRAWL_API_KEY` / `DHOLE_BRAVE_API_KEY` / `DHOLE_GOOGLE_API_KEY` | 七颗 keyed 引擎的密钥，配了才启用、点名才调用 |
+| `DHOLE_GOOGLE_CX` | `google_cse` 的 Programmable Search Engine ID；与 `DHOLE_GOOGLE_API_KEY` 成对使用 |
 | `DHOLE_HF_ENDPOINT` | 重排模型下载源，默认 huggingface.co，失败回退镜像 |
 | `DHOLE_RERANK_MODEL` | `bge-zh`（默认，中文更强）或 `mmarco`（快档，约 1.8×） |
 | `DHOLE_HOME` | 状态目录，默认 `~/.dhole` |
@@ -198,7 +199,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 <details>
 <summary>搜索引擎与重排</summary>
 
-默认池 12 个免密引擎，**池序即可信度分层**（连通稳定的主力在前，按 IP 限流、常被反爬/地区挡的居中，小众浅索引垫底；合并序也按这张表稳定分层，主力先说话）：`baidu` / `bing` / `bing_global` / `duckduckgo`（`ddg`）/ `yahoo` / `brave` / `sogou` / `so360`（`360`）/ `shenma` / `yandex` / `seznam` / `marginalia`。`engines=` 只能收窄，不能新增。索引家族是 9 个：`yahoo` 与 `bing` / `bing_global` / `duckduckgo` 同属 Bing（多入口、不多家族），`shenma` 是阿里系移动自有索引（夸克同一套基础设施），`seznam` 是捷克门户的自有索引，`marginalia` 是独立小网索引。国内直连五席：`baidu` / `bing` / `sogou` / `so360` / `shenma`。另有 `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` 六颗 keyed 后端（`brave_api` 与免密 `brave` 同索引，是付费的稳定入口）。
+默认池 12 个免密引擎，**池序即可信度分层**（连通稳定的主力在前，按 IP 限流、常被反爬/地区挡的居中，小众浅索引垫底；合并序也按这张表稳定分层，主力先说话）：`baidu` / `bing` / `bing_global` / `duckduckgo`（`ddg`）/ `yahoo` / `brave` / `sogou` / `so360`（`360`）/ `shenma` / `yandex` / `seznam` / `marginalia`。`engines=` 只能收窄，不能新增。索引家族是 9 个：`yahoo` 与 `bing` / `bing_global` / `duckduckgo` 同属 Bing（多入口、不多家族），`shenma` 是阿里系移动自有索引（夸克同一套基础设施），`seznam` 是捷克门户的自有索引，`marginalia` 是独立小网索引。国内直连五席：`baidu` / `bing` / `sogou` / `so360` / `shenma`。另有 `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` / `google_cse` 七颗 keyed 后端（`brave_api` 与免密 `brave` 同索引，是付费的稳定入口；`google_cse` 是官方 Google 索引，需要 `DHOLE_GOOGLE_API_KEY` + `DHOLE_GOOGLE_CX`，免费额度约 100 次/天）。
 
 重排用本地 cross-encoder，首次用到才下载（`bge-zh` ~279MB / `mmarco` ~119MB），换档要重启宿主。想在第一次搜索前就下完，用 `dhole models fetch`（可选 `--model mmarco`；进度在 stderr、断了重跑续传、下完核对发布方 sha256）；搜索路径本身不等下载，模型没就位时按查询词覆盖率分桶排序，不丢行。冻结语料上的公开评测：`python evals/vertical_search_baseline.py`、`python evals/ranking_baseline.py --tiers`，方法与两次采样见 [evals/README.md](evals/README.md)。
 
@@ -209,7 +210,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 <details>
 <summary>上下文成本</summary>
 
-全量连接期开销 33,612 字符（约 8.1k token，13 个工具，实测；精确值随时跑 `dhole wire ledger`）。按用法裁剪时：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 23,727 字符，加 `web_discover` 共 9 颗 25,861——被裁的工具连自己的路由行一起退出。别按单颗体积挑「最小的 N 颗」，那会把 `web_read` / `web_act` 这类主力排除在外。
+全量连接期开销 32,687 字符（约 7.9k token，13 个工具，实测；精确值随时跑 `dhole wire ledger`）。按用法裁剪时：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 23,201 字符，加 `web_discover` 共 9 颗 25,262——被裁的工具连自己的路由行一起退出。别按单颗体积挑「最小的 N 颗」，那会把 `web_read` / `web_act` 这类主力排除在外。
 
 </details>
 
@@ -227,7 +228,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 | 命令 | 用途 |
 |---|---|
 | `dhole read <url> [url2 ...]` | 不开 MCP 也抓页面：stdout 是正文（`--max-chars` / `--offset` / `--timeout S`） |
-| `dhole search <query>` | 关键词搜索：stdout 每行一条结果（`--max-results N` / `--site` / `--freshness`；`--sources package,repo,academic,…` 走七类纵向源，包与仓库要精确名） |
+| `dhole search <query>` | 关键词搜索：stdout 每行一条结果（`--max-results N` / `--site` / `--freshness`；`--sources package,repo,academic,…` 走八类纵向源，包与仓库要精确名） |
 | `dhole crawl <url>` | 爬一个站点：stdout 每页一节（`--max-pages N` / `--max-depth N`） |
 | `dhole discover <url>` | 站点地图：stdout 一行一个 URL（`--sitemap`） |
 | `dhole research <query>` | 一问一证据包：stdout 是带 `[n]` 与 URL 的引用块（`--max-sources N`；`--cross-check` 另交来源一致性报告） |

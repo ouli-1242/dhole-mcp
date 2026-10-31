@@ -38,7 +38,7 @@ TOOL_NAMES = (
 #: `web_search.sources` 的封闭值集；测试拿它与
 #: `search_verticals.SOURCE_KINDS` 对账。`web` 是默认那一池。
 SOURCE_CHOICES = ("web", "news", "academic", "qa", "code", "community",
-                  "package", "repo")
+                  "package", "repo", "reference")
 
 #: `sys_state.show/clear` 的类别；测试拿它们与 server 的两张表对账。
 #: `config` 与 `models` 只读：它们是清单，不是可以擦掉的状态。
@@ -247,7 +247,7 @@ _SEARCH_FLAGS = (
     Flag("--engines", "engines", "list",
          "engines to ask (comma or repeat)", metavar="NAME[,NAME]"),
     Flag("--sources", "sources", "list",
-         "vertical sources; package/repo take exact names, academic = arXiv + Crossref",
+         "vertical sources; package/repo take exact names, academic = arXiv + Crossref + OpenAlex",
          metavar="NAME[,NAME]", choices=SOURCE_CHOICES),
     Flag("--sort", "sort", "str", "engine sort order", metavar="ORDER",
          choices=("relevance", "newest")),

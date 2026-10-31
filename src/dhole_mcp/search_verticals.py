@@ -2,13 +2,15 @@
 
 每个公开 API 一个适配器，不要 key、不要账号：
 
-* ``academic`` -> arXiv Atom API + Crossref works（两个后端，按标题去重）
-* ``news``     -> GDELT DOC 2.0 文章列表（真实发布者 URL + 日期）
+* ``academic`` -> arXiv Atom API + Crossref works + OpenAlex（三个后端，按标题去重）
+* ``news``     -> GDELT DOC 2.0 + Bing News RSS（真实发布者 URL + 日期）
 * ``qa``       -> Stack Exchange API（Stack Overflow）
 * ``code``     -> GitHub 仓库搜索（按 star 排序）
-* ``community``-> Hacker News Algolia
-* ``package``  -> npm / PyPI / crates.io / Go proxy 的**精确包名**元数据
+* ``community``-> Hacker News Algolia + Reddit（PullPush 归档）
+* ``package``  -> npm / PyPI / crates.io / Go proxy / RubyGems / NuGet / Packagist
+                  的**精确包名**元数据
 * ``repo``     -> GitHub REST 的单个仓库健康度（stars / issues / 最近提交）
+* ``reference``-> Wikipedia 搜索 API（条目 + 摘要；不冒充发布日期）
 
 这些行带着与网页路相同的 ``published`` / ``published_precision`` /
 ``published_basis`` 字段，所以现有重排器、日期账与 ``fetch_content`` 扇出原样
@@ -29,14 +31,16 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from time import monotonic
 from typing import Awaitable, Callable, Optional
-from urllib.parse import quote, quote_plus, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, urlparse
 
 import httpx
 from lxml import etree
 
-VERTICAL_KINDS = ("news", "academic", "qa", "code", "community", "package", "repo")
+VERTICAL_KINDS = ("news", "academic", "qa", "code", "community", "package",
+                  "repo", "reference")
 SOURCE_KINDS = ("web",) + VERTICAL_KINDS
 
 VERTICAL_TIMEOUT = 8.0  # 单源预算：一个慢源不能拖住整轮
@@ -158,6 +162,77 @@ def _epoch_day(raw: object) -> tuple[str, str, str]:
     except (TypeError, ValueError, OverflowError, OSError):
         return "", "", ""
     return dt.date().isoformat(), "day", f"epoch:{value}"[:80]
+
+
+def _rfc822_day(raw: object) -> tuple[str, str, str]:
+    """RSS ``<pubDate>``（RFC 822）-> 与其它竖源同一份日期账。"""
+    value = str(raw or "").strip()
+    if not value:
+        return "", "", ""
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return "", "", ""
+    if dt is None:
+        return "", "", ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.date().isoformat(), "day", value[:80]
+
+
+def _rss_child(item, name: str) -> str:
+    """按 local-name 取 RSS 子节点文本 —— Bing 的 ``News:Source`` 带命名空间。"""
+    wanted = name.lower()
+    for child in item:
+        if isinstance(child.tag, str) and child.tag.rsplit("}", 1)[-1].lower() == wanted:
+            return " ".join("".join(child.itertext()).split())
+    return ""
+
+
+def _unwrap_bing_news(link: str) -> str:
+    """Bing News RSS 的 link 是 apiclick 包装；``url=`` 里才是发布者真链。"""
+    try:
+        parsed = urlparse(link)
+    except ValueError:
+        return link
+    if not (parsed.netloc.endswith("bing.com")
+            and parsed.path.endswith("/news/apiclick.aspx")):
+        return link
+    target = (parse_qs(parsed.query).get("url") or [""])[0]
+    return target if target.startswith(("http://", "https://")) else link
+
+
+def _openalex_abstract(index: object) -> str:
+    """OpenAlex 的倒排摘要 -> 从头开始的一段正文；没有就交回空串。"""
+    if not isinstance(index, dict):
+        return ""
+    pairs: list[tuple[int, str]] = []
+    for word, positions in index.items():
+        if not isinstance(word, str) or not isinstance(positions, list):
+            continue
+        for position in positions:
+            if isinstance(position, int):
+                pairs.append((position, word))
+    pairs.sort()
+    return " ".join(word for _position, word in pairs)[:400]
+
+
+_CJK_VERTICAL = re.compile(r"[\u3400-\u9fff]")
+_KANA = re.compile(r"[\u3040-\u30ff]")
+_HANGUL = re.compile(r"[\uac00-\ud7af]")
+
+
+def _wikipedia_lang(query: str, language: Optional[str]) -> str:
+    """查询语种 -> Wikipedia 子域。语言参数优先，其次按书写系统猜。"""
+    code = (language or "").strip().lower().split("-")[0]
+    if re.fullmatch(r"[a-z]{2,3}", code):
+        return code
+    text = query or ""
+    if _KANA.search(text):
+        return "ja"
+    if _HANGUL.search(text):
+        return "ko"
+    return "zh" if _CJK_VERTICAL.search(text) else "en"
 
 
 def _as_day(hit: VerticalHit) -> Optional[date]:
@@ -336,6 +411,48 @@ def _crossref_day(value: object) -> tuple[str, str, str]:
     return stamp.isoformat(), precision, "-".join(str(v) for v in values)[:80]
 
 
+async def _search_openalex(query: str, n: int, page: int, region: str,
+                           language: Optional[str], timeout: float,
+                           fetch: Optional[Fetcher]):
+    url = (
+        "https://api.openalex.org/works?search=" + quote_plus(query) +
+        f"&per-page={n}&page={max(0, page) + 1}&sort=relevance_score:desc"
+    )
+    status, body = await _get(url, {"Accept": "application/json"}, timeout, fetch)
+    if status == 429:
+        return [], "openalex", "blocked", "OpenAlex rate limit"
+    if status != 200:
+        return [], "openalex", *_http_error(status)
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        return [], "openalex", "error", f"unreadable JSON ({type(exc).__name__})"
+    hits: list[VerticalHit] = []
+    for i, item in enumerate(data.get("results") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        doi = str(item.get("doi") or "").strip()
+        location = item.get("primary_location") or {}
+        link = doi or str(location.get("landing_page_url") or "")
+        authors = [
+            str((a.get("author") or {}).get("display_name") or "")
+            for a in (item.get("authorships") or []) if isinstance(a, dict)
+        ]
+        venue = str(((location.get("source") or {}).get("display_name")) or "")
+        year = item.get("publication_year")
+        cited = item.get("cited_by_count")
+        bits = [f"{', '.join(authors[:3])} · " if authors else "", str(year or ""),
+                venue, f"cited {cited}" if isinstance(cited, int) else ""]
+        prefix = " · ".join(bit for bit in bits if bit)
+        abstract = _openalex_abstract(item.get("abstract_inverted_index"))
+        snippet = prefix + (f" · {abstract}" if abstract else "")
+        row = _hit("academic", "openalex", i, item.get("display_name"), link,
+                   snippet, _iso_day(item.get("publication_date")))
+        if row:
+            hits.append(row)
+    return hits, "openalex", ("ok" if hits else "empty"), ""
+
+
 async def _search_gdelt(query: str, n: int, page: int, region: str,
                         language: Optional[str], timeout: float,
                         fetch: Optional[Fetcher]):
@@ -363,6 +480,42 @@ async def _search_gdelt(query: str, n: int, page: int, region: str,
         if row:
             hits.append(row)
     return hits, "gdelt", ("ok" if hits else "empty"), ""
+
+
+async def _search_bing_news(query: str, n: int, page: int, region: str,
+                            language: Optional[str], timeout: float,
+                            fetch: Optional[Fetcher]):
+    # Bing News 的 RSS 端点不接受 count/mkt：带 count 会换回普通 HTML 版面，
+    # 带 mkt 会 302 回首页（2026-10-31 实测）。行数因此在客户端截，翻页也没有
+    # 偏移量可发 —— page>0 如实交回 empty，而不是把第一页再交一遍。
+    if page:
+        return [], "bing_news", "empty", (
+            "Bing News RSS has no page offset (first page only)")
+    url = ("https://www.bing.com/news/search?q=" + quote_plus(query)
+           + "&format=RSS")
+    status, body = await _get(
+        url, {"Accept": "application/rss+xml, application/xml"}, timeout, fetch)
+    if status in (403, 429):
+        return [], "bing_news", "blocked", f"HTTP {status} from Bing News"
+    if status != 200:
+        return [], "bing_news", *_http_error(status)
+    try:
+        root = etree.fromstring(body, parser=_xml_parser())
+    except Exception as exc:
+        return [], "bing_news", "error", f"unreadable RSS ({type(exc).__name__})"
+    hits: list[VerticalHit] = []
+    for i, item in enumerate(root.iter("item"), start=1):
+        source = _rss_child(item, "Source")
+        description = _rss_child(item, "description")
+        snippet = " · ".join(bit for bit in (source, description) if bit)
+        row = _hit("news", "bing_news", i, _rss_child(item, "title"),
+                   _unwrap_bing_news(_rss_child(item, "link")), snippet,
+                   _rfc822_day(_rss_child(item, "pubDate")))
+        if row:
+            hits.append(row)
+        if len(hits) >= n:
+            break
+    return hits, "bing_news", ("ok" if hits else "empty"), ""
 
 
 async def _search_stackexchange(query: str, n: int, page: int, region: str,
@@ -468,6 +621,90 @@ async def _search_community(query: str, n: int, page: int, region: str,
         if row:
             hits.append(row)
     return hits, "hackernews", ("ok" if hits else "empty"), ""
+
+
+async def _search_reddit(query: str, n: int, page: int, region: str,
+                         language: Optional[str], timeout: float,
+                         fetch: Optional[Fetcher]):
+    # reddit.com/search.json 对无登录请求回 403（2026-10-31 实测）；PullPush 是
+    # 公开的 Reddit 归档接口。它只有 before/after 时间游标、没有 offset —— 所以
+    # 只交第一页，page>0 如实说没有下一页，而不是把第一页再交一遍。
+    if page:
+        return [], "reddit", "empty", (
+            "Reddit archive search has no page offset (first page only)")
+    url = (
+        "https://api.pullpush.io/reddit/search/submission/?q=" + quote_plus(query) +
+        f"&size={n}&sort=desc&sort_type=score"
+    )
+    status, body = await _get(url, {"Accept": "application/json"}, timeout, fetch)
+    if status in (403, 429):
+        return [], "reddit", "blocked", f"HTTP {status} from PullPush"
+    if status != 200:
+        return [], "reddit", *_http_error(status)
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        return [], "reddit", "error", f"unreadable JSON ({type(exc).__name__})"
+    hits: list[VerticalHit] = []
+    for i, item in enumerate(data.get("data") or [], start=1):
+        if (not isinstance(item, dict) or item.get("over_18")
+                or item.get("removed_by_category")):
+            continue
+        permalink = str(item.get("permalink") or "")
+        target = str(item.get("url") or "")
+        if not target.startswith(("http://", "https://")):
+            target = f"https://www.reddit.com{permalink}" if permalink else ""
+        elif "reddit.com" in target and permalink:
+            target = f"https://www.reddit.com{permalink}"
+        snippet = (
+            f"r/{item.get('subreddit', '')} · {item.get('score', 0)} points · "
+            f"{item.get('num_comments', 0)} comments"
+            + (f" · {_clean(item.get('selftext'))[:240]}" if item.get("selftext") else "")
+        )
+        row = _hit("community", "reddit", i, item.get("title"), target, snippet,
+                   _epoch_day(item.get("created_utc")))
+        if row:
+            hits.append(row)
+    return hits, "reddit", ("ok" if hits else "empty"), ""
+
+
+async def _search_wikipedia(query: str, n: int, page: int, region: str,
+                            language: Optional[str], timeout: float,
+                            fetch: Optional[Fetcher]):
+    lang = _wikipedia_lang(query, language)
+    url = (
+        f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search"
+        f"&format=json&utf8=1&srsearch={quote_plus(query)}"
+        f"&srlimit={n}&sroffset={max(0, page) * n}"
+    )
+    status, body = await _get(url, {"Accept": "application/json"}, timeout, fetch)
+    if status in (403, 429):
+        return [], "wikipedia", "blocked", f"HTTP {status} from Wikipedia"
+    if status != 200:
+        return [], "wikipedia", *_http_error(status)
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        return [], "wikipedia", "error", f"unreadable JSON ({type(exc).__name__})"
+    if data.get("error"):
+        return [], "wikipedia", "error", (
+            _clean((data.get("error") or {}).get("info"))[:160] or "Wikipedia API error")
+    hits: list[VerticalHit] = []
+    for i, item in enumerate(((data.get("query") or {}).get("search") or []),
+                             start=1):
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        article = quote(str(title or "").replace(" ", "_"), safe="/()_,-.")
+        snippet = _clean(item.get("snippet"))
+        words = item.get("wordcount")
+        if isinstance(words, int):
+            snippet = f"{snippet} · {words} words" if snippet else f"{words} words"
+        row = _hit("reference", "wikipedia", i, title,
+                   f"https://{lang}.wikipedia.org/wiki/{article}", snippet)
+        if row:
+            hits.append(row)
+    return hits, "wikipedia", ("ok" if hits else "empty"), ""
 
 
 _PACKAGE_NAME = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._~/-]*$")
@@ -640,6 +877,126 @@ async def _search_go(query: str, n: int, page: int, region: str,
     return ([row] if row else []), "go", ("ok" if row else "empty"), ""
 
 
+async def _search_rubygems(query: str, n: int, page: int, region: str,
+                           language: Optional[str], timeout: float,
+                           fetch: Optional[Fetcher]):
+    name, status, error = _package_name(query, "RubyGems", allow_slash=False)
+    if status:
+        return [], "rubygems", status, error
+    url = f"https://rubygems.org/api/v1/gems/{quote(name)}.json"
+    status_code, body = await _get(url, {"Accept": "application/json"}, timeout, fetch)
+    if status_code == 404:
+        return [], "rubygems", "empty", f"no gem named {name!r} on RubyGems"
+    if status_code in (403, 429):
+        return [], "rubygems", "blocked", f"HTTP {status_code} from RubyGems"
+    if status_code != 200:
+        return [], "rubygems", *_http_error(status_code)
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        return [], "rubygems", "error", f"unreadable JSON ({type(exc).__name__})"
+    version = str(data.get("version") or "")
+    published = _iso_day(data.get("version_created_at") or data.get("created_at"))
+    licenses = data.get("licenses") or []
+    license_name = (", ".join(str(x) for x in licenses)
+                    if isinstance(licenses, list) else _clean(licenses))
+    downloads = data.get("downloads")
+    bits = [f"v{version}" if version else "",
+            f"{downloads} downloads" if downloads else "", license_name,
+            f"updated {published[0]}" if published[0] else "",
+            str(data.get("homepage_uri") or data.get("source_code_uri") or "")[:120]]
+    snippet = " · ".join(bit for bit in bits if bit)
+    info = _clean(data.get("info"))
+    row = _hit("package", "rubygems", 1, f"{data.get('name') or name} (RubyGems)",
+               f"https://rubygems.org/gems/{name}",
+               snippet + (f" · {info}" if info else ""), published)
+    return ([row] if row else []), "rubygems", ("ok" if row else "empty"), ""
+
+
+async def _search_nuget(query: str, n: int, page: int, region: str,
+                        language: Optional[str], timeout: float,
+                        fetch: Optional[Fetcher]):
+    name, status, error = _package_name(query, "NuGet", allow_slash=False)
+    if status:
+        return [], "nuget", status, error
+    url = ("https://azuresearch-usnc.nuget.org/query?q=packageid:"
+           + quote(name) + "&take=5&prerelease=true")
+    status_code, body = await _get(url, {"Accept": "application/json"}, timeout, fetch)
+    if status_code == 404:
+        return [], "nuget", "empty", f"no package named {name!r} on NuGet"
+    if status_code in (403, 429):
+        return [], "nuget", "blocked", f"HTTP {status_code} from NuGet"
+    if status_code != 200:
+        return [], "nuget", *_http_error(status_code)
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        return [], "nuget", "error", f"unreadable JSON ({type(exc).__name__})"
+    rows = [item for item in data.get("data") or [] if isinstance(item, dict)]
+    match = next((item for item in rows
+                  if str(item.get("id") or "").lower() == name.lower()), None)
+    if match is None:
+        return [], "nuget", "empty", f"no package named {name!r} on NuGet"
+    version = str(match.get("version") or "")
+    downloads = match.get("totalDownloads")
+    authors = match.get("authors")
+    if isinstance(authors, list):
+        authors = ", ".join(str(a) for a in authors[:3])
+    bits = [f"v{version}" if version else "",
+            f"{downloads} downloads" if downloads else "", _clean(authors)]
+    snippet = " · ".join(bit for bit in bits if bit)
+    description = _clean(match.get("description"))
+    row = _hit("package", "nuget", 1, f"{match.get('id') or name} (NuGet)",
+               f"https://www.nuget.org/packages/{name}",
+               snippet + (f" · {description}" if description else ""))
+    return ([row] if row else []), "nuget", ("ok" if row else "empty"), ""
+
+
+async def _search_packagist(query: str, n: int, page: int, region: str,
+                            language: Optional[str], timeout: float,
+                            fetch: Optional[Fetcher]):
+    name, status, error = _package_name(query, "Packagist", allow_slash=True)
+    if status:
+        return [], "packagist", status, error
+    if name.count("/") != 1:
+        return [], "packagist", "bad_query", (
+            f"{name[:60]!r} is not a valid Packagist name (vendor/package)")
+    url = f"https://repo.packagist.org/p2/{name}.json"
+    status_code, body = await _get(url, {"Accept": "application/json"}, timeout, fetch)
+    if status_code == 404:
+        return [], "packagist", "empty", f"no package named {name!r} on Packagist"
+    if status_code in (403, 429):
+        return [], "packagist", "blocked", f"HTTP {status_code} from Packagist"
+    if status_code != 200:
+        return [], "packagist", *_http_error(status_code)
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        return [], "packagist", "error", f"unreadable JSON ({type(exc).__name__})"
+    packages = data.get("packages") or {}
+    versions = packages.get(name)
+    if not versions:
+        versions = next((rows for key, rows in packages.items()
+                         if key.lower() == name.lower()), [])
+    latest = versions[0] if versions and isinstance(versions[0], dict) else {}
+    if not latest:
+        return [], "packagist", "empty", f"no package named {name!r} on Packagist"
+    version = str(latest.get("version") or "")
+    published = _iso_day(latest.get("time"))
+    licenses = latest.get("license") or []
+    license_name = (", ".join(str(x) for x in licenses)
+                    if isinstance(licenses, list) else _clean(licenses))
+    bits = [f"v{version}" if version else "", license_name,
+            f"updated {published[0]}" if published[0] else "",
+            str((latest.get("source") or {}).get("url") or "")[:120]]
+    snippet = " · ".join(bit for bit in bits if bit)
+    description = _clean(latest.get("description"))
+    row = _hit("package", "packagist", 1, f"{name} (Packagist)",
+               f"https://packagist.org/packages/{name}",
+               snippet + (f" · {description}" if description else ""), published)
+    return ([row] if row else []), "packagist", ("ok" if row else "empty"), ""
+
+
 _REPO_SHAPE = re.compile(
     r"github\.com[:/]+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#]|$)")
 
@@ -726,25 +1083,32 @@ async def _search_repo(query: str, n: int, page: int, region: str,
 
 
 #: 每个 kind 的后端列表，第一个是 `search_one` 直接问的那一个。`academic` 有
-#: 两个后端（arXiv + Crossref），`package` 有四个 registry —— 其余 kind 是一对一。
+#: 三个后端（arXiv + Crossref + OpenAlex），`news` 与 `community` 各两个，
+#: `package` 有七个 registry —— 其余 kind 是一对一。
 _KIND_ADAPTERS: dict[str, tuple[tuple[str, "Adapter"], ...]] = {
-    "news": (("gdelt", _search_gdelt),),
-    "academic": (("arxiv", _search_arxiv), ("crossref", _search_crossref)),
+    "news": (("gdelt", _search_gdelt), ("bing_news", _search_bing_news)),
+    "academic": (("arxiv", _search_arxiv), ("crossref", _search_crossref),
+                 ("openalex", _search_openalex)),
     "qa": (("stackexchange", _search_stackexchange),),
     "code": (("github", _search_github),),
-    "community": (("hackernews", _search_community),),
+    "community": (("hackernews", _search_community), ("reddit", _search_reddit)),
     "package": (("npm", _search_npm), ("pypi", _search_pypi),
-                ("crates", _search_crates), ("go", _search_go)),
+                ("crates", _search_crates), ("go", _search_go),
+                ("rubygems", _search_rubygems), ("nuget", _search_nuget),
+                ("packagist", _search_packagist)),
     "repo": (("github_repo", _search_repo),),
+    "reference": (("wikipedia", _search_wikipedia),),
 }
 
 #: 主后端名：`sources=['academic']` 在回执里仍然报 `arxiv` 的那一份，也是
 #: `search_one` 直接问的那一家。
 _BACKENDS = {kind: rows[0][0] for kind, rows in _KIND_ADAPTERS.items()}
 
-#: 同一 kind 里跨后端去重。arXiv 与 Crossref 会交回同一篇论文的两份记录。
+#: 同一 kind 里跨后端去重。arXiv / Crossref / OpenAlex 会交回同一篇论文的多份
+#: 记录；GDELT 与 Bing News 也会交回同一篇报道。
 _KIND_DEDUPE = {
     "academic": lambda rows: _dedupe_same_title(rows),
+    "news": lambda rows: _dedupe_same_title(rows),
 }
 
 

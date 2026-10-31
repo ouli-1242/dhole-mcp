@@ -84,7 +84,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 - First search of a session showing `rerank_mode=merge` = the rerank model is still loading; one retry restores `neural`.
 - Narrow the pool when a slice of the web is what you want: international index `bing_global` / `yahoo` / `brave` / `duckduckgo` / `marginalia`, domestic `baidu` / `sogou` / `so360` (max 12 names per search).
 - Batch known URLs with `web_read`'s `urls=[...]` instead of serial single calls.
-- Map a site before crawling it (`sitemap=true` is one request); don't max out `max_pages` blindly.
+- Map a site before crawling it (`sitemap=true` uses the site's own index); don't max out `max_pages` blindly.
 - Repeated fetches hit cache (1h default; article 6h); pass `cache_ttl=0` only when freshness matters.
 
 ## Response signals → proactively tell the user

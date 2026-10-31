@@ -82,7 +82,7 @@ class EnvVar:
         return raw
 
 
-# ─── the 13 surviving env variables (17.0 大众化一刀切；见 plan §3-20) ──────
+# ─── the surviving env variables (17.0 大众化一刀切；见 plan §3-20) ──────
 ALL: tuple[EnvVar, ...] = (
     EnvVar(
         name="DHOLE_ALLOW_PRIVATE_HOSTS",
@@ -167,6 +167,24 @@ ALL: tuple[EnvVar, ...] = (
         read_at="call",
         scenario="poor search results / want a different pool",
         summary="Firecrawl search API key; keyed backend, only runs when named.",
+        read_by=("search_metasearch",),
+    ),
+    EnvVar(
+        name="DHOLE_GOOGLE_API_KEY",
+        kind="secret",
+        default="",
+        read_at="call",
+        scenario="poor search results / want a different pool",
+        summary="Google Programmable Search API key; keyed backend, only runs when named.",
+        read_by=("search_metasearch",),
+    ),
+    EnvVar(
+        name="DHOLE_GOOGLE_CX",
+        kind="str",
+        default="",
+        read_at="call",
+        scenario="poor search results / want a different pool",
+        summary="Google Programmable Search Engine ID (cx) paired with the API key.",
         read_by=("search_metasearch",),
     ),
     EnvVar(

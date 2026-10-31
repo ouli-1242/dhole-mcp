@@ -600,7 +600,7 @@ class TestItem12ConnectCost:
         assert f"{expected} chars" in row, (
             f"收窄后的 doctor 报的不是这台进程付的账（应为 {expected}）：{row}")
         assert "2 tool(s)" in row, row
-        assert "ACTIVE 1501" in face and "FULL 2727" in face, (
+        assert "ACTIVE 1532" in face and "FULL 2767" in face, (
             f"这道判据依赖两份 instructions 不同值：{face}")
 
     def test_an_unreadable_registry_degrades_to_a_note(self, monkeypatch):

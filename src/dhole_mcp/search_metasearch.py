@@ -139,6 +139,10 @@ class BraveApiAuthError(MetaSearchException):
     """Brave 官方 API 拒绝凭据（token 无效或额度用尽）。"""
 
 
+class GoogleCseAuthError(MetaSearchException):
+    """Google CSE 拒绝凭据（API key / cx 无效、未配置或额度用尽）。"""
+
+
 class MetaBlockedException(MetaSearchException):
     """某个后端拒绝了我们（CAPTCHA / 403 / 限流）。调用方应把该后端熔断一个冷却
     期，免得持续捶一台正在封我们 IP 的主机（有升级成更长 IP 封禁的风险）。
@@ -1068,6 +1072,9 @@ _DHOLE_TO_BACKEND = {
     # brave_api 是 Brave 官方付费 API（keyed）；免密抓取版另有 "brave" 一席，
     # 两者同名不同物 —— 名字必须能各答各的，共识家族才分得清。
     "brave_api": "brave_api",
+    # google_cse 是 Google 官方 Programmable Search JSON API（keyed）：免密池里
+    # 没有 Google 索引，它补的是**家族**（不是入口）。要 key + cx 两个值。
+    "google_cse": "google_cse",
 }
 # 默认池 = 注册表的全部免密引擎（§3-22）。2026-10 起池序=可信度分层（详见
 # search_engines._PRIORITY_TIERS，那张表是唯一的作者）：直连稳定的主力在前
@@ -1787,6 +1794,61 @@ class _Firecrawl(KeyedApiEngine):
         return out
 
 
+class _GoogleCse(KeyedApiEngine):
+    """Google Programmable Search JSON API（customsearch/v1）。
+
+    这是免密池里唯一现实的 **Google 索引**入口：官方 API、按查询计费，免费额度
+    约 100 次/天（以 Google 当前价目为准）。它要两个值而不止一个 key ——
+    ``DHOLE_GOOGLE_API_KEY`` 与 ``DHOLE_GOOGLE_CX``（Programmable Search Engine
+    ID）。缺 API key 时 `no_key` 由骨架统一报；只有 key、没有 cx 时在
+    `build_request` 里抛鉴权错误，避免把一次配置缺失报成"Google 没有结果"。
+
+    索引家族是 ``google``：与 Bing/Brave 都不是同一套索引，共识按独立家族计。
+    ``num`` 单发上限 10，超出钳到 10（CSE 的硬限制）；日期走 `dateRestrict`
+    （d1/w1/m1/y1），所以它进 `_DATE_AWARE_ENGINES`。``cx`` 与 key 一样可能
+    带凭据形状，日志脱敏沿用骨架的 `mask`。
+    """
+    name = "google_cse"
+    env_var = "DHOLE_GOOGLE_API_KEY"
+    env_cx = "DHOLE_GOOGLE_CX"
+    AuthError = GoogleCseAuthError
+    endpoint = "https://www.googleapis.com/customsearch/v1"
+    http_method = "GET"
+    # 400 通常是 key/cx 写错或该引擎未开启；把它归到鉴权面，比"空结果"可诊断。
+    auth_codes = (400, 401, 403)
+
+    _DATE_RESTRICT = {"d": "d1", "w": "w1", "m": "m1", "y": "y1"}
+
+    def search_json(self, query, max_results, timelimit=None):
+        # cx 是第二把凭据：只在 build_request 里查会让通用的 keyed 契约测试
+        # （不配环境、只做载荷差分）把它读成"这家的载荷构造坏了"。缺 cx 和缺
+        # key 是同一类事，所以在**发请求之前**用它该有的错误面拒绝。
+        if not (os.environ.get(self.env_cx) or "").strip():
+            raise self.AuthError(
+                f"{self.name} requires {self.env_cx}, which is not set")
+        return super().search_json(query, max_results, timelimit)
+
+    def build_request(self, query, max_results, timelimit):
+        cx = (os.environ.get(self.env_cx) or "").strip()
+        payload = {
+            "key": self.api_key(),
+            "cx": cx,
+            "q": query,
+            "num": min(max_results, 10),
+        }
+        if timelimit in self._DATE_RESTRICT:
+            payload["dateRestrict"] = self._DATE_RESTRICT[timelimit]
+        return (self.endpoint, {"Accept": "application/json"}, payload)
+
+    def parse_response(self, data):
+        out = []
+        for item in data.get("items") or []:
+            if item.get("title") and item.get("link"):
+                out.append(_ns(item["title"], item["link"],
+                               item.get("snippet", "")))
+        return out
+
+
 class _BraveApi(KeyedApiEngine):
     """Brave 官方付费 API（api.search.brave.com/res/v1/web/search）。
 
@@ -1832,6 +1894,7 @@ KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
     _DeepSeek.name: _DeepSeek,
     _Firecrawl.name: _Firecrawl,
     _BraveApi.name: _BraveApi,
+    _GoogleCse.name: _GoogleCse,
 }
 
 
@@ -2394,9 +2457,18 @@ def _prefer_reliable(order: list, lane: frozenset) -> list:
 
 _SEARCH_TRACKING_PARAMS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
+    "fbclid", "gclid", "yclid", "msclkid",  # Bing / Yandex 的点击标识
+    "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
     "igshid", "si",  # YouTube / 社交平台的分享跟踪参数
+    # 邮件与分析工具的匿名点击标识：它们只标记"你从哪一次投递点进来"，
+    # 不改变页面内容，两个变体在结果列表里却会占两行。
+    "_hsenc", "_hsmi", "mkt_tok", "trk", "trkcampaign", "sc_cid",
+    "vero_id", "wickedid", "oly_anon_id", "oly_enc_id",
 }
+
+# 默认端口不写出来：:80 之于 http、:443 之于 https 是同一个地址。只在没有
+# userinfo 时做（见 _normalize_url），端口本身也不参与主机别名。
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 _GITHUB_REPO_HOSTS = {"github.com", "www.github.com"}
 
@@ -2433,12 +2505,15 @@ def _normalize_url(url: str) -> str:
     （例如 ?page=2 与 ?page=3）仍然区分。utm_ 家族按**前缀**匹配，不是固定名单：
     引擎和分享面板会随时造出 utm_id / utm_reader / utm_bid，而名单写好的第二天就
     过时了。同时把 scheme+host 转小写，并去掉非根路径的尾斜杠。
+    同一个地址的两种常见拼法也在这一层合并：http:80 / https:443 这种默认端口，
+    以及 `www.` 前缀（`www.example.com` 与 `example.com` 是同一页；余下部分必须
+    仍是一个带点的主机名，好让名为 `www.com` 的主机不被并进 `com`）。带 userinfo
+    的 URL 保留 netloc 原样，不做这两项改写。
     GitHub 的仓库所有者与仓库名大小写不敏感，所以 github.com 和 www.github.com
     的前两段非空路径会转小写；后面的路径段保持不变，因为分支名和文件路径可能
     大小写敏感。GitHub 的系统路由（topics、settings、explore 等）不参与路径折叠，
     因为它们不是仓库，大小写可能承载含义。带凭据的 URL 跳过 GitHub 专属的路径
     折叠，好让不透明的 userinfo 永远不会成为新引入的规范化碰撞的一部分。
-    www.github.com 保留它自己的主机名，而不是再加一套主机别名归一策略。
     """
     if not url:
         return ""
@@ -2448,6 +2523,23 @@ def _normalize_url(url: str) -> str:
     p = urlparse(u)
     scheme = (p.scheme or "https").lower()
     host = p.netloc.lower()
+    # 默认端口与 `www.` 都是同一个地址的两种写法。带 userinfo 的 URL 不改写
+    # netloc：那里可能有不透明凭据，而这一刀只该合并"确实是同一页"的两种拼法。
+    if p.username is None and p.password is None:
+        _hostname = (p.hostname or "").lower()
+        if _hostname:
+            # `www.com` 这类主机名本身以 www. 开头，剥完只剩一个 TLD —— 只有当
+            # 余下部分仍是一个带点的主机名时才当作别名。
+            if _hostname.startswith("www.") and "." in _hostname[4:]:
+                _hostname = _hostname[4:]
+            try:
+                _port = p.port
+            except ValueError:
+                _port = None
+            _netloc = f"[{_hostname}]" if ":" in _hostname else _hostname
+            if _port is not None and _port != _DEFAULT_PORTS.get(scheme):
+                _netloc += f":{_port}"
+            host = _netloc
     path = p.path.rstrip("/") if len(p.path) > 1 else p.path
     if p.hostname in _GITHUB_REPO_HOSTS and p.username is None and p.password is None:
         segments = path.split("/")
@@ -2562,6 +2654,10 @@ async def metasearch(
 
     seen: dict[str, dict[str, Any]] = {}
     order: list[dict[str, str]] = []
+    # 每家引擎这一轮从发车到回话的墙钟（毫秒）。只记**真的跑完/跑挂**的那几发：
+    # 硬截止时还没回话的引擎没有观测值，缺席比补一个等于整轮时长的数更诚实。
+    engine_ms: dict[str, float] = {}
+    engine_started: dict[str, float] = {}
     # 多样性法定数：至少等 `min_engines` 个后端有贡献（不是只等一个后端凑够条数），
     # 这样单个后端的偏好/限流无法主导 —— 跨后端的多样性才是健壮性。软兜底在
     # `_SOFT_DEADLINE` 时只要结果够就返回，哪怕还有后端已死/被 CAPTCHA（不为它们
@@ -2707,11 +2803,24 @@ async def metasearch(
         # 不在表里的引擎回落到主查询（向后兼容）。
         q = (query_map or {}).get(name, query)
         # engine.search 是同步的（阻塞 HTTP）-> 丢到线程里。
-        res = await asyncio.to_thread(
-            eng.search, q, region, safesearch, timelimit, page,
-        )
+        # 墙钟记在**引擎回话的那一刻**，不是收账的那一刻：软截止后收已答完的任务时，
+        # 两者相差整段等待，而"这家花了多久"问的不是我们什么时候去取。
+        # 被取消的那几家不记：它们没有答案，等待时长会被读成响应延迟。
+        try:
+            res = await asyncio.to_thread(
+                eng.search, q, region, safesearch, timelimit, page,
+            )
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            engine_ms[name] = (time() - engine_started[name]) * 1000
+            raise
+        engine_ms[name] = (time() - engine_started[name]) * 1000
         return name, (res or [])
 
+    _launch_at = time()
+    for _name in instances:
+        engine_started[_name] = _launch_at
     tasks = {asyncio.ensure_future(_run(n, e)): n for n, e in instances.items()}
 
     # 带 key 的 JSON 引擎：**只在**点名时才跑（每次调用都花真钱），而且只在
@@ -2723,9 +2832,17 @@ async def metasearch(
 
         async def _run_keyed(name=b, _eng=eng):
             q = (query_map or {}).get(name, query)
-            res = await asyncio.to_thread(_eng.search_json, q, max_results + 4, timelimit)
+            try:
+                res = await asyncio.to_thread(_eng.search_json, q, max_results + 4, timelimit)
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                engine_ms[name] = (time() - engine_started[name]) * 1000
+                raise
+            engine_ms[name] = (time() - engine_started[name]) * 1000
             return name, res
 
+        engine_started[b] = time()
         tasks[asyncio.ensure_future(_run_keyed())] = b
 
     pending = set(tasks)
@@ -2819,6 +2936,10 @@ async def metasearch(
         # `evals/pool_baseline.py` 报的是响应里已有的四桶，而四桶说不出"多花的那几秒"。
         round_stats["lone_family_wait_s"] = round(round_wait_s, 3)
         round_stats["lone_family_grace_s"] = _LONE_FAMILY_GRACE
+        if engine_ms:
+            # 逐家墙钟只覆盖观测到的终态；没有条目的引擎不是"0ms"，是没观测。
+            round_stats["engine_ms"] = {
+                k: round(v, 1) for k, v in sorted(engine_ms.items())}
         if lane_pref:
             round_stats["language_lane"] = sorted(lane_pref)
 

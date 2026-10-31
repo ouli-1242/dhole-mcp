@@ -19,6 +19,7 @@ from datetime import date
 
 import pytest
 
+from dhole_mcp import search_verticals as sv
 from dhole_mcp.search_verticals import search_many, search_one
 
 pytestmark = pytest.mark.smoke
@@ -180,7 +181,8 @@ class TestThePackageSource:
                                           fetch=fetch)
         assert hits == []
         assert calls == []
-        assert {r.backend for r in reports} == {"npm", "pypi", "crates", "go"}
+        assert {r.backend for r in reports} == {
+            backend for backend, _adapter in sv._KIND_ADAPTERS["package"]}
         assert all(r.status == "bad_query" for r in reports), [
             (r.backend, r.status) for r in reports]
         assert all("exact package name" in r.error for r in reports)
@@ -277,15 +279,19 @@ class TestTheRepoSource:
 class TestTheAcademicSource:
 
     @pytest.mark.asyncio
-    async def test_both_backends_answer_and_a_shared_title_is_kept_once(self):
+    async def test_every_academic_backend_answers_and_a_shared_title_is_kept_once(self):
         fetch, _ = _fetcher({
             "export.arxiv.org": (200, _ARXIV),
             "api.crossref.org": (200, _CROSSREF),
+            "api.openalex.org": (200, b'{"results": []}'),
         })
         hits, reports = await search_many(["academic"], "task groups", 5,
                                           fetch=fetch)
-        assert {r.backend for r in reports} == {"arxiv", "crossref"}
-        assert all(r.status == "ok" for r in reports)
+        by_backend = {r.backend: r for r in reports}
+        assert {"arxiv", "crossref", "openalex"} <= set(by_backend)
+        assert by_backend["arxiv"].status == "ok"
+        assert by_backend["crossref"].status == "ok"
+        assert by_backend["openalex"].status == "empty"
         titles = [h.title for h in hits]
         assert titles.count("Task Groups for Everyone") == 1, "同标题只留 arXiv"
         crossref_only = [h for h in hits if h.backend == "crossref"]

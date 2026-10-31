@@ -89,6 +89,7 @@ _PRIORITY_TIERS = {
     "baidu": 0, "bing": 0,                                   # 直连稳定的主力
     "bing_global": 1, "duckduckgo": 1, "yahoo": 1,           # 稳定的国际入口
     "tavily": 1, "brave_api": 1, "exa": 1,                   # keyed 稳定入口
+    "google_cse": 1,                                          # keyed: 官方 Google 索引
     "sogou": 2, "so360": 2,                                  # 国内独立索引，按 IP 限流
     "shenma": 2,                                             # 同上：AliWAF 惩罚页按 IP 限流
     "brave": 2, "yandex": 2,                                 # 国际，常被反爬/地区挡
@@ -131,6 +132,9 @@ _INDEX_FAMILY = {
     # brave_api 是 Brave 官方付费 API；与免密抓取版 brave 同一套索引 ——
     # 同一 URL 两边都出现时是一个家族答的话，不是两个（yahoo 之于 bing 同理）。
     "brave_api": "brave",
+    # google_cse 是官方 Google 索引：免密池里没有第二个 Google 入口，所以它
+    # 是一个独立家族（不是某个既有家族的别名）。
+    "google_cse": "google",
 }
 
 # 谁的索引答得出中文。与 `_CN_DIRECT` 不是一回事：那张表说的是"这台机器直连拨不拨得通"
@@ -162,7 +166,7 @@ _CJK_RE = re.compile(
 # 与「这台机器直连拨不拨得通」的 `_CN_DIRECT` 不是一回事。
 _CN_LANE = frozenset({"baidu", "sogou", "so360", "shenma", "bing"})
 _EN_LANE = frozenset({"bing_global", "duckduckgo", "yahoo", "brave",
-                      "yandex", "marginalia", "seznam"})
+                      "yandex", "marginalia", "seznam", "google_cse"})
 
 
 def language_lane(query: str) -> frozenset:
@@ -204,6 +208,7 @@ _DATE_AWARE_ENGINES = frozenset({
     "exa",                     # keyed: startPublishedDate=<now-7d>（绝对窗口）
     "firecrawl",               # keyed: tbs=qdr:w
     "brave_api",               # keyed: freshness=pw（官方 API 的短码词表）
+    "google_cse",              # keyed: dateRestrict=d1/w1/m1/y1
 })
 
 
@@ -307,6 +312,9 @@ class EngineReport:
     #: （raw=0）与"后处理把可用行全丢了"（raw>0、usable=0）。-1 = 没观测。
     raw_usable: int = -1
     yield_verdict: str = ""
+    #: 这一发从派给引擎到它交回答案（成功、被拦或报错）的墙钟，毫秒。0.0 = 没观测
+    #: （硬截止时还在飞的那几家），不是"立刻回话"。
+    duration_ms: float = 0.0
 
 
 def _engine_yield() -> dict:
@@ -518,6 +526,7 @@ async def multi_search(
     # 布尔是有损折叠，empty 就是被折掉的那一格。
     yield_rows = _engine_yield()
     cooldowns = _cooldowns()
+    engine_ms = (round_stats or {}).get("engine_ms", {}) or {}
     reports: list[EngineReport] = []
     for name, st in status.items():
         y = yield_rows.get(name, {}) if isinstance(yield_rows, dict) else {}
@@ -530,12 +539,17 @@ async def multi_search(
             except (KeyError, TypeError, ValueError):
                 return default
 
+        try:
+            _ms = float(engine_ms.get(name, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            _ms = 0.0
         common = {
             "status": st,
             "item_nodes": _y("last_nodes", -1),
             "usable": _y("last", -1),
             "raw_usable": _y("last_raw", -1),
             "yield_verdict": str(y.get("verdict", "") or ""),
+            "duration_ms": _ms,
         }
         if st == "ok":
             reports.append(EngineReport(name=name, ok=True, **common))

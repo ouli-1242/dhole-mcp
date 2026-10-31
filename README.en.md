@@ -102,7 +102,7 @@ All 13 tools register by default. Install it and everything is already reachable
 | `web_read` | Fetches any URL: the anti-bot ladder, PDF / OCR, batching, focused extraction; returns text, **bytes** (`save_to`) or **evidence** (status line / headers / the 302 chain); `check` answers "did this page change" and attaches a unified diff |
 | `web_act` | Works on the page: click, fill, **select a dropdown**, press keys, drag, scroll, screenshot, **upload files**, **answer dialogs**, **multi-tab**, **back through history**, **print to PDF**; a submission pauses by default until you say yes |
 | `web_request` | Sends one non-GET (POST / PUT / PATCH / DELETE / HEAD), exactly once: no retry, no cache, no browser escalation |
-| `web_search` | 12 keyless engines in parallel + a local reranker, optionally fetching the full text of the top three; plus seven vertical sources (news / papers (arXiv + Crossref) / Q&A / code / community / package metadata / GitHub repositories) |
+| `web_search` | 12 keyless engines in parallel + a local reranker, optionally fetching the full text of the top three; plus eight vertical sources (news / papers (arXiv + Crossref + OpenAlex) / Q&A / code / community / reference (Wikipedia) / package metadata / GitHub repositories) |
 | `web_research` | One question, one call, one evidence pack with `[n] URL` citations; a source that fails explains why instead of dragging the pack down. `cross_check=true` adds a source-agreement report (claims, supporting/opposing domains, `agreement_score`) — an agreement signal, not a fact-check |
 | `web_recall` | Searches **the pages this machine already read**: zero network, zero model; returns pointers, excerpts and staleness flags |
 | `web_crawl` | Same-site crawling: sitemaps, keyword filters, path subtrees |
@@ -124,7 +124,7 @@ Once installed, just talk:
 
 ## How it differs from other fetchers
 
-- **Zero keys**: 12 keyless search engines, seven vertical sources, the anti-bot ladder and the reranker — none of them needs an account or a top-up. The optional `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` backends are called only when you configured a key **and** name them.
+- **Zero keys**: 12 keyless search engines, eight vertical sources, the anti-bot ladder and the reranker — none of them needs an account or a top-up. The optional `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` / `google_cse` backends are called only when you configured a key **and** name them (`google_cse` also needs a Programmable Search Engine ID).
 - **Zero models**: judgement belongs to the outer agent; dhole stays a deterministic tool layer. The same page fetched twice gives the same result. No small model quietly decides "this page is probably about X".
 - **Fully local**: the response cache, cookies and reranker live in `~/.dhole`. Apart from the sites you ask it to fetch, the process sends nothing anywhere.
 - **Honest failures**: every call answers with the same JSON — how many characters were extracted, which tier ran, what to call next. An empty extraction says it was empty; a grey anti-bot page is never packaged as "content".
@@ -138,15 +138,15 @@ Once installed, just talk:
 | Brave Search | 8 | 110,719 | ~27.7k | API key, metered |
 | Firecrawl | 28 | 94,937 | ~23.7k | credits |
 | Playwright (all caps) | 72 | 45,602 | ~11.4k | free |
-| **dhole-mcp** | **13** | **33,612** (30,885 tools + 2,727 instructions) | **~8.1k** | free, keyless |
+| **dhole-mcp** | **13** | **32,687** (29,920 tools + 2,767 instructions) | **~7.9k** | free, keyless |
 | Playwright (default) | 25 | 20,286 | ~5.1k | free |
 | Tavily | 5 | 7,694 | ~1.9k | API key, metered |
 | Exa (hosted, tools/list only) | 2 | 2,419 | ~0.6k | keyless, rate-limited |
 | Fetch (official reference) | 1 | 1,150 | ~0.3k | free |
 
-- Fourth cheapest of seven products (third if Exa is excluded; fifth if Playwright's two tiers are counted separately) — **2.9–3.3× cheaper** than the two most popular options, Brave and Firecrawl (character ratios of 3.35 and 2.87).
+- Fourth cheapest of seven products (third if Exa is excluded; fifth if Playwright's two tiers are counted separately) — **2.8–3.3× cheaper** than the two most popular options, Brave and Firecrawl (character ratios of 3.27 and 2.80).
 - **Fewer tools does not mean a cheaper description**: Brave's 8 tools cost 27.7k (~3.5k per tool); dhole's 13 average ~0.6k each and cover fetch / search / crawl / act / research / feed / PDF / recall / local documents.
-- Those 2,727 characters (~656 tokens) of instructions are the only usage guide paid at connect time. Deep documentation never enters the context — whoever asks pays for it (`sys_guide`, or `dhole skill install`). Trimming to `DHOLE_TOOLS=web_read,web_search` brings the connect cost down to 11,664 characters (~2.8k).
+- Those 2,727 characters (~656 tokens) of instructions are the only usage guide paid at connect time. Deep documentation never enters the context — whoever asks pays for it (`sys_guide`, or `dhole skill install`). Trimming to `DHOLE_TOOLS=web_read,web_search` brings the connect cost down to 11,964 characters (~2.9k).
 
 **Variable cost** — one call against the same dense documentation page (`docs.python.org/3/library/asyncio-task.html`), measuring how much comes back:
 
@@ -185,7 +185,8 @@ Two doors: the `env` block in the host config (needs a restart), or `dhole confi
 | `DHOLE_DEFAULT_ENGINES` | Overrides the default search pool |
 | `DHOLE_SEARCH_ROW_FILTER` | `off` disables the SEO-farm row filter (on by default) |
 | `DHOLE_DEFAULT_CONTENT_CHARS` | Default content budget, 40000 (500–200000) |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` / `DHOLE_FIRECRAWL_API_KEY` / `DHOLE_BRAVE_API_KEY` | Keys for the six keyed engines; enabled only if configured, used only if named |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` / `DHOLE_FIRECRAWL_API_KEY` / `DHOLE_BRAVE_API_KEY` / `DHOLE_GOOGLE_API_KEY` | Keys for the seven keyed engines; enabled only if configured, used only if named |
+| `DHOLE_GOOGLE_CX` | Programmable Search Engine ID for `google_cse`; pair it with `DHOLE_GOOGLE_API_KEY` |
 | `DHOLE_HF_ENDPOINT` | Reranker download source; defaults to huggingface.co with a mirror fallback |
 | `DHOLE_RERANK_MODEL` | `bge-zh` (default, stronger for Chinese) or `mmarco` (the fast tier, roughly 1.8×) |
 | `DHOLE_HOME` | State directory, defaults to `~/.dhole` |
@@ -195,7 +196,7 @@ Two doors: the `env` block in the host config (needs a restart), or `dhole confi
 <details>
 <summary>Search engines and reranking</summary>
 
-The default pool is 12 keyless engines and **the pool order is a trust tier** (the reliably reachable workhorses first, then the ones that hit per-IP limits / anti-bot / regional blocks in the middle, small niche indexes with shallow coverage last; the merged ranking is layered by the same table, so the workhorses speak first): `baidu` / `bing` / `bing_global` / `duckduckgo` (`ddg`) / `yahoo` / `brave` / `sogou` / `so360` (`360`) / `shenma` / `yandex` / `seznam` / `marginalia`. `engines=` can only narrow the pool, never add to it. There are 9 index families: `yahoo` belongs to Bing along with `bing` / `bing_global` / `duckduckgo` (more entry points, not more families); `shenma` is Alibaba's mobile-owned index (Quark runs on the same infrastructure); `seznam` is a Czech portal's own index; `marginalia` indexes the independent small web. Five engines work from a domestic China connection without a proxy: `baidu` / `bing` / `sogou` / `so360` / `shenma`. Six keyed backends exist alongside them — `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` (`brave_api` is the paid stable entry for the same index as the keyless `brave`).
+The default pool is 12 keyless engines and **the pool order is a trust tier** (the reliably reachable workhorses first, then the ones that hit per-IP limits / anti-bot / regional blocks in the middle, small niche indexes with shallow coverage last; the merged ranking is layered by the same table, so the workhorses speak first): `baidu` / `bing` / `bing_global` / `duckduckgo` (`ddg`) / `yahoo` / `brave` / `sogou` / `so360` (`360`) / `shenma` / `yandex` / `seznam` / `marginalia`. `engines=` can only narrow the pool, never add to it. There are 9 index families: `yahoo` belongs to Bing along with `bing` / `bing_global` / `duckduckgo` (more entry points, not more families); `shenma` is Alibaba's mobile-owned index (Quark runs on the same infrastructure); `seznam` is a Czech portal's own index; `marginalia` indexes the independent small web. Five engines work from a domestic China connection without a proxy: `baidu` / `bing` / `sogou` / `so360` / `shenma`. Seven keyed backends exist alongside them — `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` / `google_cse` (`brave_api` is the paid stable entry for the same index as the keyless `brave`; `google_cse` is the official Google index and needs both `DHOLE_GOOGLE_API_KEY` and `DHOLE_GOOGLE_CX`, with a free quota of roughly 100 queries/day).
 
 Reranking uses a local cross-encoder, downloaded on first use (`bge-zh` ~279MB / `mmarco` ~119MB); switching tiers needs a host restart. To finish the download before the first search, run `dhole models fetch` (optionally `--model mmarco`; progress on stderr, a cut download resumes on the next run, and the finished file is checked against the publisher sha256); the search path itself never waits for it — with no model it buckets and sorts by query-term coverage and never drops a row. Public benchmarks on a frozen corpus: `python evals/vertical_search_baseline.py` and `python evals/ranking_baseline.py --tiers` — method and both samples in [evals/README.md](evals/README.md).
 
@@ -206,7 +207,7 @@ Reranking uses a local cross-encoder, downloaded on first use (`bge-zh` ~279MB /
 <details>
 <summary>Context cost</summary>
 
-Full connect overhead is 33,612 characters (~8.1k tokens across 13 tools, measured). Trimmed by usage: read / search / request / crawl / documents / feeds / state / guide — those 8 tools — are 23,727 characters, and 9 tools with `web_discover` are 25,861; a trimmed tool leaves the wire together with its own routing line. Do not pick "the smallest N tools" by size alone — that is how you end up excluding `web_read` and `web_act`.
+Full connect overhead is 32,687 characters (~7.9k tokens across 13 tools, measured). Trimmed by usage: read / search / request / crawl / documents / feeds / state / guide — those 8 tools — are 23,201 characters, and 9 tools with `web_discover` are 25,262; a trimmed tool leaves the wire together with its own routing line. Do not pick "the smallest N tools" by size alone — that is how you end up excluding `web_read` and `web_act`.
 
 </details>
 
@@ -224,7 +225,7 @@ Full connect overhead is 33,612 characters (~8.1k tokens across 13 tools, measur
 | Command | What it is for |
 |---|---|
 | `dhole read <url> [url2 ...]` | Fetch without an MCP host: stdout is the page text (`--max-chars` / `--offset` / `--timeout S`) |
-| `dhole search <query>` | Keyword search: one ranked row per result on stdout (`--max-results N` / `--site` / `--freshness`; `--sources package,repo,academic,…` for the seven vertical sources, packages and repositories by exact name) |
+| `dhole search <query>` | Keyword search: one ranked row per result on stdout (`--max-results N` / `--site` / `--freshness`; `--sources package,repo,academic,…` for the eight vertical sources, packages and repositories by exact name) |
 | `dhole crawl <url>` | Crawl one site: one section per page on stdout (`--max-pages N` / `--max-depth N`) |
 | `dhole discover <url>` | Site map: one URL per line on stdout (`--sitemap`) |
 | `dhole research <query>` | A cited evidence pack on stdout, with `[n]` + URL per block (`--max-sources N`; `--cross-check` adds a source-agreement report) |

@@ -53,6 +53,7 @@ import heapq
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from time import time
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -956,6 +957,26 @@ def _fold_locale_path(path: str) -> tuple[str, str]:
     return (rest or "/"), m.group(1)
 
 
+def _lastmod_epoch(value: str) -> float:
+    """Sitemap 的 ``<lastmod>`` 排序键；缺省/不可解析 = 0（排在已日期行之后）。
+
+    只读取站点自己写下的日期：W3C 常见形状是 ``2026-09-27``、
+    ``2026-09-27T08:00:00Z``、带时区偏移的 ISO。缺失与坏值都回到 0，而不是
+    "现在" —— 一份没写日期的 sitemap 不该被当成刚更新过。
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (ValueError, TypeError, OverflowError, OSError):
+        # Windows 上 timestamp() 对公元 1 年这类日期抛 OSError；坏日期与缺失同价。
+        return 0.0
+
+
 def _order_map_entries(entries: list, query: str = "") -> tuple[list, dict]:
     """地图里哪些行先发，以及这次重排付了什么代价。唯一作者（C4）。
 
@@ -987,23 +1008,28 @@ def _order_map_entries(entries: list, query: str = "") -> tuple[list, dict]:
         folded_of[i] = folded
         # 代表的第一判据是"这条没有语言段"，也就是原文自己；`locale` 是摘下来的那段
         # 名字，直接当排序键会变成按语言字母序选代表（/ja/ 因此被 /de/ 挤掉）。
-        groups.setdefault(folded, []).append((i, score_link(su.url, "", query),
-                                              bool(locale)))
+        groups.setdefault(folded, []).append(
+            (i, score_link(su.url, "", query), bool(locale),
+             _lastmod_epoch(getattr(su, "lastmod", ""))))
     demote: set[int] = set()
     for members in groups.values():
         if len(members) <= MIRROR_VARIANTS_KEPT:
             continue  # 不超过三个变体：一行都不许动（一个真用 /ja/ 的站就长这样）
-        keep = sorted(members, key=lambda m: (-m[1], m[2], m[0]))
-        demote.update(i for (i, _s, _h) in keep[MIRROR_VARIANTS_KEPT:])
+        # 同分时新日期先当代表：同一份文档的语言副本里，最近改过的那一版更可能
+        # 是站点仍在维护的原文侧；日期全缺的站回到纯文档序（epoch=0）。
+        keep = sorted(members, key=lambda m: (-m[1], m[2], -m[3], m[0]))
+        demote.update(i for (i, _s, _h, _lm) in keep[MIRROR_VARIANTS_KEPT:])
 
-    front = sorted(((score_link(su.url, "", query), i, su)
+    front = sorted(((score_link(su.url, "", query),
+                     _lastmod_epoch(getattr(su, "lastmod", "")), i, su)
                     for i, su in enumerate(entries) if i not in demote),
-                   key=lambda t: (-t[0], t[1]))
-    back = sorted(((score_link(entries[i].url, "", query), i, entries[i])
-                   for i in demote), key=lambda t: (-t[0], t[1]))
-    shipping = [su for _sc, _i, su in front] + [su for _sc, _i, su in back]
+                   key=lambda t: (-t[0], -t[1], t[2]))
+    back = sorted(((score_link(entries[i].url, "", query),
+                    _lastmod_epoch(getattr(entries[i], "lastmod", "")), i, entries[i])
+                   for i in demote), key=lambda t: (-t[0], -t[1], t[2]))
+    shipping = [su for _sc, _lm, _i, su in front] + [su for _sc, _lm, _i, su in back]
     before = [su.url for su in entries]
-    after = [su.url for _sc, _i, su in front]
+    after = [su.url for _sc, _lm, _i, su in front]
     moved = sum(1 for b, a in zip(before, after) if b != a)
     return shipping, {"mirrors_demoted": len(demote),
                       "mirror_pages": len({folded_of[i] for i in demote}),

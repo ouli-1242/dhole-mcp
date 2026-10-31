@@ -32,7 +32,7 @@ class TestKeyedRegistryMatchesTheRoster:
 
         names = sorted(KEYED_ENGINES)
         assert names == ["bocha", "brave_api", "deepseek", "exa",
-                         "firecrawl", "tavily"]
+                         "firecrawl", "google_cse", "tavily"]
         assert _validate_engines(names) == names
 
     def test_retired_keyed_names_are_not_selectable(self):
@@ -616,7 +616,10 @@ def test_readme_engine_roster_matches_the_registry():
     # `sogou_weixin`（子串陷阱，与 test_tool_descriptions._engine_tokens 同类）。
     words = set(re.findall(r"[a-z0-9_]+", readme.lower()))
 
-    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia", "mwmbl"}
+    # wikipedia 仍是退役的**通用引擎**，但 17.7 起以 `reference` 纵向源回归；
+    # 它出现在 README 的竖源段是合法的。工具定义里的引擎列表仍由
+    # test_tool_descriptions 的 retired 集合守着，不许把它当引擎点名。
+    retired = {"sogou_weixin", "baidu_baike", "grokipedia", "mwmbl"}
     assert not (words & retired), (
         f"README 引擎段还点名了 17.0 已删除的引擎: {sorted(words & retired)} —— "
         "调用方照着点会收到 invalid_request，读起来像是我们坏了")

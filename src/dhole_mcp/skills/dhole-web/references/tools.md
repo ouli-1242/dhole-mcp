@@ -212,7 +212,7 @@ The extraction path itself is not a knob: markdown / text / article / structured
 
 ## web_search: engines, ranking, dates
 
-**Engine matrix** (10 keyless + 2 keyed; max 12 names per search). All 10 keyless
+**Engine matrix** (12 keyless + 7 keyed; max 19 names per search). All 12 keyless
 engines are in the default pool — there is no opt-in tier to name:
 
 | Engine | Direct from CN | Notes |
@@ -222,33 +222,36 @@ engines are in the default pool — there is no opt-in tier to name:
 | `brave` / `sogou` / `so360` (`360`) / `shenma` / `yandex` | mixed | often walled: scraping-tier `brave` has bot walls, `sogou`/`so360` are IP-rate-limited, `shenma` sits behind AliWAF punish pages (same shape as `so360`'s challenge page — the circuit breaker cools it, the mains carry), `yandex` region-gates |
 | `seznam` | proxy needed | own Czech index; answers global queries with a CZ blend, nothing on CJK |
 | `marginalia` | proxy needed | independent small-web index, English-heavy, shallow on commercial queries — deliberately last |
-| `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` | keyed (off by default) | **Per-call billing, quota deducted on dispatch** — only when the user names them. `brave_api` is the official Brave API entry to the same index as keyless `brave` (paid, stable) |
+| `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` / `google_cse` | keyed (off by default) | **Per-call billing, quota deducted on dispatch** — only when the user names them. `brave_api` is the official Brave API entry to the same index as keyless `brave` (paid, stable). `google_cse` is the official Google index and needs **two** values: `DHOLE_GOOGLE_API_KEY` + `DHOLE_GOOGLE_CX`; its free quota is roughly 100 queries/day |
 
 Pool order is a reliability tier (stable mains first, rate-limited/obscure last); the merged
 row order follows the same tier as a stable partition, so a URL the mains confirmed is read
 before one only a tail engine saw.
 
-Two search abilities are gone (their backends are retired): **WeChat-article
+One search ability is still gone (its backend is retired): **WeChat-article
 search** (`sogou_weixin` was the only index of that pool — weixin.sogou.com
-content is not fully covered by the general engines) and **encyclopedia lookups as
-structured answers** (`wikipedia` / `grokipedia` / `baidu_baike`; the general
-engines still return those pages, they are just no longer queried as APIs).
+content is not fully covered by the general engines). Encyclopedia lookups are
+back as the `reference` **vertical source** below (Wikipedia's search API), not as
+a general web engine — they still do not count as an index family.
 
-**Vertical sources** (`sources=`): seven keyless APIs beside the web pool —
-`news` (GDELT DOC 2.0), `academic` (arXiv Atom + Crossref), `qa` (Stack Exchange /
-Stack Overflow), `code` (GitHub **repository** search, sorted by stars),
-`community` (Hacker News via Algolia), `package` (npm / PyPI / crates.io / Go
-proxy, **exact package names only**) and `repo` (one GitHub repository's health).
+**Vertical sources** (`sources=`): eight keyless APIs beside the web pool —
+`news` (GDELT DOC 2.0 + Bing News RSS), `academic` (arXiv Atom + Crossref +
+OpenAlex), `qa` (Stack Exchange / Stack Overflow), `code` (GitHub **repository**
+search, sorted by stars), `community` (Hacker News via Algolia + Reddit via the
+PullPush archive), `package` (npm / PyPI / crates.io / Go proxy / RubyGems /
+NuGet / Packagist, **exact package names only**), `repo` (one GitHub
+repository's health) and `reference` (Wikipedia articles).
 `sources=['web','academic']` asks both; omitting `'web'` asks only the verticals,
 and `engines=` is then refused because there is no web pool to narrow. They are
 **not web index families**: a vertical row carries an **empty** `engines_consensus`
 and never raises the `x of N` count, because "arXiv agrees with arXiv" is not
 corroboration. `source` names the backend that answered (`arxiv` / `crossref` /
-`gdelt` / `stackexchange` / `github` / `github_repo` / `hackernews` / `npm` / `pypi` /
-`crates` / `go`), and `source_detail` is one row per backend asked:
+`openalex` / `gdelt` / `bing_news` / `stackexchange` / `github` / `github_repo` /
+`hackernews` / `reddit` / `npm` / `pypi` / `crates` / `go` / `rubygems` / `nuget` /
+`packagist` / `wikipedia`), and `source_detail` is one row per backend asked:
 `{source, backend, status, count, delivered, duration_ms, error?}` with `status`
 in `ok|empty|not_found|bad_query|blocked|timeout|error`. A kind with several
-backends (`academic`, `package`) gets several rows — one backend being blocked
+backends (`news`, `academic`, `community`, `package`) gets several rows — one backend being blocked
 does not turn the kind into a failure. `count` is candidate rows left after the
 site/date filters; `delivered` is how many are in this response — they differ
 whenever ranking, the quality filters or `max_results` left that source out. A
@@ -260,13 +263,14 @@ and two vertical rows with the same host + normalized title collapse to one;
 arXiv and Crossref rows with the same title also collapse to the arXiv row.
 
 **`package` and `repo` take exact names, not keywords.** `package` accepts one
-npm / PyPI / crates.io name or a full Go module path (`github.com/owner/repo`);
-a query with spaces is refused by every registry as `bad_query` before any request
-— keyword search belongs in the web pool. An unknown name is `empty` (the registry
-said no such package), never an error. `repo` accepts `owner/repo` or a
-github.com URL; it returns stars, forks, open issues, last commit day, license and
-`ARCHIVED`, with `not_found` for a missing/private repo and `blocked` for the
-unauthenticated 60-requests/hour quota. Both are keyless; no token is read.
+npm / PyPI / crates.io / RubyGems / NuGet name, a full Go module path
+(`github.com/owner/repo`) or a Packagist `vendor/package`; a query with spaces is
+refused by every registry as `bad_query` before any request — keyword search
+belongs in the web pool. An unknown name is `empty` (the registry said no such
+package), never an error. `repo` accepts `owner/repo` or a github.com URL; it
+returns stars, forks, open issues, last commit day, license and `ARCHIVED`, with
+`not_found` for a missing/private repo and `blocked` for the unauthenticated
+60-requests/hour quota. Both are keyless; no token is read.
 
 **`sort='newest'`** orders only rows that state a publish **day**
 (`published_precision='day'`) newest-first; month/year floors, relative stamps
@@ -281,11 +285,14 @@ newer rows and keeps the undated. Dropped counts are named in the summary
 separately.
 
 **Vertical reliability**: GDELT is best-effort and rate-limits hard (one query per
-5s; a 429 arrives as `status=blocked`, not as "no news"); unauthenticated GitHub
-search allows 10 requests/min and says so on 403/429; arXiv and Stack Exchange are
-stable but can be slow; Hacker News (Algolia) is the most reliable of the five.
-One dead source never erases another's rows — each failure is its own report row
-and the round still returns what answered.
+5s; a 429 arrives as `status=blocked`, not as "no news"); Bing News RSS only
+serves its first page (a `page>0` request says so instead of repeating page one);
+unauthenticated GitHub search allows 10 requests/min and says so on 403/429;
+arXiv, Crossref, OpenAlex, Wikipedia and Stack Exchange are stable but can be
+slow; Hacker News (Algolia) and the PullPush Reddit archive are the most reliable
+community sources; the package registries are stable, and RubyGems/NuGet/Packagist
+answer unknown names with `empty`. One dead source never erases another's rows —
+each failure is its own report row and the round still returns what answered.
 
 **Ranking**: a local cross-encoder reranks. Two profiles are registered: `bge-zh` (default, bilingual, ~279MB, best Chinese) and `mmarco` (multilingual MiniLM int8, ~119MB, ~1.8x faster; same 67-query corpus P@5 0.552 vs 0.549, Chinese slightly lower, English higher). Choose with `DHOLE_RERANK_MODEL` — a startup read, so **restart the host to switch**; the response's `rerank_model` names the one that actually scored. While it is still loading in a fresh process, `rerank_mode=merge` gets the free path: rows are grouped by how many distinct query terms their title/snippet/URL carry (2+ first, then 1, then 0), and consensus + engine position order each group. Measured on the 67-query corpus (agent-a): merge P@5 0.370 -> 0.525, MRR 0.550 -> 0.731; the neural arm stays at 0.549 / 0.737. The grouping never runs when any row carries a model verdict — a synonym-only row the model called relevant is not demoted for missing literal words. One retry restores `neural`. `relevance_score` is normalized (top is always 1.0); `min_raw_relevance` is what can judge "the whole round is irrelevant" — the raw-score distribution is model-specific. For the default `bge-zh` (measured): off-topic ~1e-4, marginal ~0.2, true hits 0.93+. **Start at 0.1**; hard negatives on the same topic sit at p90 0.18, so higher starts killing good results. `fetch_hint` reports each round's raw-score span, and `rerank_model` tells you which calibration to use. `engines_consensus` counts independent index FAMILIES (9 total — `bing`, `bing_global`, `yahoo` and `duckduckgo` are one Bing-family entry, so 12 engines reach 9 families), not raw hits.
 
@@ -300,7 +307,7 @@ and the round still returns what answered.
 The floor is off by default (0): `fetch_content=true` on its own behaves exactly as before. Every auto-fetched page carries its own `engines_consensus` whether or not the floor is set, so the fetched set can be judged without cross-referencing the result list.
 
 **Dates**: dhole sends a date window to `bing` / `bing_global` / `brave` / `duckduckgo`
-(keyed `bocha` / `tavily` / `exa` / `firecrawl` / `brave_api` too; a keyed engine joins
+(keyed `bocha` / `tavily` / `exa` / `firecrawl` / `brave_api` / `google_cse` too; a keyed engine joins
 this list only when its wire has a date slot), and only as day/week/month/year presets — that list is the
 table in code (`_DATE_AWARE_ENGINES`), and the per-round truth is `date_filter.engines_filtered`,
 not this sentence. `after=<date>` is widened to the narrowest preset covering the window (`date_filter` reports what was sent and which engines got no date filter at all); `before=<date>` is a **per-row verdict, not a round-wide filter** — it is the upper bound of the window (`after=` is the lower one), so it keeps the rows published before that date and drops only the ones **provably newer** than it. Everything else stays: a row with no date, or one the engine wrote as "3 days ago" (relative), cannot be bounded against an absolute cutoff without pretending. `date_coverage` says exactly how many rows fell in each of those classes and how many were dropped, so a partial filter is never mistaken for a silent one. Not every engine puts a date on the page at all, and the ones that do put it on only some rows (measured on the frozen SERP corpus through the real parsers: sogou 4 of 8 rows, baidu 2 of 5 and 2 of 6, bing 4 of 4 on one layout and 1 of 4 on the other, bing_global 1 of 10 and that one relative, so360 and yandex none), so `published` is absent more often than you would like — read `date_coverage` before concluding the round was date-filtered. One engine's gap used to be dhole's own and is now closed: `baidu` is sent its time parameter (`gpc` / `stf`, an absolute range plus `stf_type=2`), pinned by payload differential — the key appears on the request that named a window and not on the one that sent no `timelimit`. Any engine outside that table answers with no date filter because **dhole sends it nothing**: that is a fact about this wire, so do not conclude an engine that received no filter cannot filter by date. Date-bounded increments belong to `feed_read(since=)`. There is **no `total_estimate`** — do not look for it, do not invent one.
@@ -328,18 +335,18 @@ The memory door: it searches the **local content cache** (`cache.db`, the pages 
 ## web_discover: the map, and what it costs
 
 - One call, URLs only: no page body comes back for content, and `pages_crawled` counts the fetches building the map paid — `0` when it came from `sitemap=true` or from a held plan (`resume_token=`), one per step when it walks links. Reading the picks is `web_read(urls=[...])`; a second `web_crawl` would rediscover what is already in hand. Every map is also held in the server process (1h, memory only) under the returned `plan_id`, and when the cap or the deadline stops a link-walked map early the held plan is the **whole** map (`pages_discovered` rows: the ones this answer shipped first, then the ones never sent) — `next_resume_token` points at the first of those — hand it to `web_crawl(resume_token=...)` to fetch the plan without re-sending URLs (see web_crawl below)
-- A map has two prices. `sitemap=true` asks for the site's own index — one request, the whole site, and each row can carry the `<lastmod>` the site published. Without it the map is grown by walking links, which costs one request per step and stops at `max_pages` (1-40). `'auto'` tries the index first, then walks
+- A map has two prices. `sitemap=true` asks for the site's own index — the whole site (an index sitemap may take a few requests), and each row can carry the `<lastmod>` the site published. Without it the map is grown by walking links, which costs one request per step and stops at `max_pages` (1-40). `'auto'` tries the index first, then walks
 - robots.txt still decides eligibility: URLs already known to be disallowed are dropped before any request and counted in `robots_skipped`. A map is not a promise that those pages can be fetched
 - Map rows carry only what differs from the default, because a map's length is set by the site rather than by the caller — a 1000-URL map is 70KB of URLs, and restating one constant per row turned that into 350KB
 - **A map's size is the site's call, so two knobs on THIS tool bound it.** `max_total_chars` (1,000-200,000, default 60,000, `0` = no cap) prices the **serialized rows**, which is the only part a map has: content rows carry no body, so the same budget used to overdraw itself (measured: 1,000 rows = 116,173 chars against a 60,000 ask, and `truncated_by_total_chars` said nothing). When it bites, `pages_discovered` is the size of the MAP and `len(pages)` is the rows that shipped, `truncated_by_total_chars=true`, and the held-back rows are stored with the ones you got — `next_resume_token='<plan_id>:<rows shipped>'`. Pass that back to **`web_discover`** (`resume_token=`) for the next rows: it walks no network, ships URLs only, and the arithmetic is `rows 561-1000 of 1000`. `web_crawl` with the same token FETCHES those rows' content instead — the cursor is shared, the verb is not. `max_pages` bounds only the walking map: it counts page fetches, so a `sitemap=true` map or a held-plan page (`resume_token=`) pays none — the reply names which shape happened instead of leaving it to guesswork
 - **Map rows are not in the sitemap's own order, and the reply says how much moved.** A site's `sitemap.xml` is a document-order index, and document order means "what the site listed first", not "which page you want". Measured on a 1,000-entry sitemap that listed 100 documents plus 900 locale copies of them: the shipped page was 626 rows of which **0 were the originals**, and the page the caller wanted was in the map but past the budget. So rows are ordered by the same scorer the link-walk uses (your `search` terms when you gave any, otherwise the content prior: docs/api up, login/cart down), and the 4th-and-later locale variant of a page is placed **behind** the whole map instead of eating budget — up to 3 variants of a page still ship up front, so a site whose real content lives in `/ja/` is not folded away. Reordering only: the demoted rows are still rows of the map (`pages_discovered` counts them), still in the plan, still reachable with the cursor. The summary carries the counts (`N of M moved`, `K locale variant(s) of P page(s) placed behind the 3 copies kept up front`, `the X row(s) that shipped cover Y of the map's Z distinct page(s)`), and a map with nothing to fold says nothing about folding
-- **A map built from `sitemap.xml` is fetched with no credentials** — that one request (and the `robots.txt` read in front of it) goes out bare, unlike the pages a crawl fetches. So a site that serves its sitemap only to an authenticated caller reads here as "no sitemap found", and when `cred_defaults` holds a credential for that host the summary says so in the same breath. The levers that do work: `sitemap=false` (link-walk, and those page fetches carry it), or `web_read` the sitemap URL itself
-- **`timeout=` is the map's clock, and an empty map says which of the two ran out.** A `sitemap=true` map is one request, so that request needs to answer inside this call's budget: `timeout=` (whole call, ms, default 25,000, 1-120000 or refused by name) bounds both the call and the index request, and `web_crawl`'s own clock is `deadline_ms`. It used to bound neither — the number was handed to the engine as a per-page budget while the map ran on `deadline_ms` and the index request on a hardcoded 15s, so measured against a site whose `/sitemap.xml` answers after 20s, `timeout=30000` and `timeout=120000` returned the same 30.0s wall clock, the same empty map, and the same sentence blaming the site. Now the reply distinguishes the two ways a map comes back empty: **"ran out this call's time budget … that is the clock this call was given, not a 'no' from the site"** (raise the knob `next_action` names — `timeout=` here, `deadline_ms` on `web_crawl`) versus the site answering with nothing to parse (change source: `sitemap=false`, or read the index URL directly). Retry the first one with the same budget and you get the same cut; that is why it names the number instead of saying "retry shortly"
+- **A map built from `sitemap.xml` is fetched with no credentials** — that fetch (and the `robots.txt` read in front of it) goes out bare, unlike the pages a crawl fetches. So a site that serves its sitemap only to an authenticated caller reads here as "no sitemap found", and when `cred_defaults` holds a credential for that host the summary says so in the same breath. The levers that do work: `sitemap=false` (link-walk, and those page fetches carry it), or `web_read` the sitemap URL itself
+- **`timeout=` is the map's clock, and an empty map says which of the two ran out.** A `sitemap=true` map comes from the site's index, so those fetches need to answer inside this call's budget: `timeout=` (whole call, ms, default 25,000, 1-120000 or refused by name) bounds both the call and the index fetch, and `web_crawl`'s own clock is `deadline_ms`. It used to bound neither — the number was handed to the engine as a per-page budget while the map ran on `deadline_ms` and the index request on a hardcoded 15s, so measured against a site whose `/sitemap.xml` answers after 20s, `timeout=30000` and `timeout=120000` returned the same 30.0s wall clock, the same empty map, and the same sentence blaming the site. Now the reply distinguishes the two ways a map comes back empty: **"ran out this call's time budget … that is the clock this call was given, not a 'no' from the site"** (raise the knob `next_action` names — `timeout=` here, `deadline_ms` on `web_crawl`) versus the site answering with nothing to parse (change source: `sitemap=false`, or read the index URL directly). Retry the first one with the same budget and you get the same cut; that is why it names the number instead of saying "retry shortly"
 - `path_include` / `path_exclude` scope the map exactly as they scope a crawl (`/docs` is a subtree, not a string prefix; the only wildcard is a trailing `/*`). `search` then filters it by keyword, and **what it can compare depends on how the map was made**: a link-walked map has URL + page title, while a `sitemap=true` map has only the `loc` the site published — so a word that lives in a page's title but not in its URL matches nothing there, and the summary names that half (leave `sitemap=` unset so the map is link-walked and each row's title gets read, or use `web_search`). Both filters run BEFORE the map's cap, so a keyword near the end of a 4,000-entry sitemap still arrives; filtering after the cap would return an empty map that reads as "this site has no such page". On a `resume_token` page they are honored the same way (they judge the URL text) and the summary counts what they kept
 
 ## web_crawl: discovery economics and politeness
 
-- The map is its own tool: `web_discover` returns URLs without body extraction, but **expanding the link graph still costs one request per page** (up to `max_pages`). For a one-request map: `sitemap=true` (whole site) or `max_pages=1` (start page's links only)
+- The map is its own tool: `web_discover` returns URLs without body extraction, but **expanding the link graph still costs one request per page** (up to `max_pages`). For an index-based map: `sitemap=true` (whole site) or `max_pages=1` (start page's links only)
 - **A big site is a plan, not a parade of URLs**: `web_discover` holds its map in the server process for 1h and returns a `plan_id`. `web_crawl(url=..., resume_token='<plan_id>:0')` fetches that plan WITHOUT re-sending the URL list — a 1000-page task costs O(1) arguments per round instead of ~7.6KB of re-typed URLs. When the page cap, the char budget or the deadline stops the run, the reply carries `next_resume_token`; pass it back (same selector=/schema=) to continue exactly where the budget bit — same plan + same token = the same pages, so nothing is refetched or skipped. `selector=` (CSS) and `schema=` (same shape as web_read's) project every planned page — without them the rows are plain markdown, the same shape a crawl returns. **Tokens live 1h in that one process's memory**: a restart or a second process starts with an empty store, and the refusal names that (not "expired") — the fix is one fresh `web_discover` in the process you are talking to. After mapping, read a few picks directly with `web_read(urls=[...])` — one call, no re-discovery
 - `focus='query'` does two different jobs at once: it **prioritizes the links** whose path and anchor text look relevant (the best-first queue scores them) and it **filters each fetched page** down to the blocks matching the query — the same trimming `web_read` does, applied per page. Passing `focus` therefore does not only narrow what you read, it changes which pages get reached at all; leave it out for an unbiased crawl. `search=` is narrower in one way and wider in another: it filters the URL map **without** touching the bodies (that is the job `focus` does), but it is also the query the map's rows are ordered by — the same scorer the link-walk uses, so passing it changes **which rows ship first**, not only which rows survive (see the map section: `N of M moved`). The map's own document order is never what ships: with `search=` the rows go by your terms, without it they go by the content prior (`docs`/`api` up, `login`/`cart` down), so `search=` changes *which* rows are early, not *whether* they are ordered
 - `path_include` / `path_exclude` match **path subtrees**: `'/docs'` matches `/docs` and everything below it but NOT `/docs-old`; the only wildcard is a trailing `/*`. When a run stops early, the advice may point at one subtree to scope to — but only when a subtree is a **subset** of what is still queued. If every queued URL already sits under that one segment (which is what a `path_include` you passed does), scoping selects nothing, so the reply says so plainly instead of recommending it; the budget levers are the ones that still change the result

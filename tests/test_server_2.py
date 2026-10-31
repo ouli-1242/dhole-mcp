@@ -728,11 +728,11 @@ def test_w1_5_every_registry_name_appears_in_configuration_doc():
 def test_secret_kind_never_default_echos_value():
     """The ``secret`` kind (17.0: Tavily + 博查；G25 评审加 HTTP 传输的
     bearer token —— brightdata 的 keyed 引擎已删；exa 后来按新契约加回，
-    与 deepseek / firecrawl 一起). Their ``default`` is a
-    marker string, not a value - W2's config audit depends on it.
+    与 deepseek / firecrawl / brave_api / google_cse 一起). Their ``default``
+    is a marker string, not a value - W2's config audit depends on it.
     """
     secrets = [e for e in env_registry.ALL if e.kind == "secret"]
-    assert len(secrets) == 7
+    assert len(secrets) == 8
     for entry in secrets:
         assert entry.default == "", (
             f"{entry.name} is secret but has a non-empty default - W2 will "

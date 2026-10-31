@@ -188,7 +188,7 @@ p90 0.99851 · max 0.99996** —— 双峰，与 `reranker.py` 自己的标定�
 | 数 | 值 | 命令 |
 |---|---|---|
 | 全量测试 | **2,923 passed / 7 skipped / 61 deselected**，121s | `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY python -m pytest -q` |
-| 连接期字符 | **24,030**（instructions 2,345 + tools/list 21,685）——B0 当时 17 颗口径；`DHOLE_TASKS` / `DHOLE_VAULT` 两旗已在 17.0 随四工具移除，当前 13 颗口径 33,099 | `python tests/tool_payload_measure.py` |
+| 连接期字符 | **24,030**（instructions 2,345 + tools/list 21,685）——B0 当时 17 颗口径；`DHOLE_TASKS` / `DHOLE_VAULT` 两旗已在 17.0 随四工具移除，当前 13 颗口径 32,687 | `python tests/tool_payload_measure.py` |
 | MCP 快照 | **35 次 tools/call，isError 真 14 / 假 21**，markers=none，11.3s | `python tests/mcp_snapshot.py` |
 | ruff | **All checks passed**（基线原有 8 个 W 批次残留 F401/F541，已在 `928d832` 先修掉） | `python -m ruff check src tests` |
 

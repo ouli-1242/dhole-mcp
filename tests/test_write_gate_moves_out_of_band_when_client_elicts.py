@@ -143,6 +143,9 @@ class TestTheWebWriteGateMovesOutOfBand:
         out = await srv.web_request(url="https://api.example.com/v1/x",
                                     method="POST")
         assert legacy_refusal in (out.next_action or "")
+        assert "any stored credentials" in (out.error or ""), (
+            "the gate must say any stored credentials ride along - claiming some "
+            "are stored is false on a machine with none")
         assert capture_send == []
         # ② 会话在场但没声明 elicitation 能力
         connected(_StubSession(capable=False))

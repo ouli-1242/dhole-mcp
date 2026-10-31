@@ -15,6 +15,8 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib.parse import urljoin, urlparse
 
@@ -213,6 +215,10 @@ class Response:
         # 是合法 Python，但 `test_server_10` 的 AST 守卫会把它读成"后者遮蔽前者"，
         # 而那条守卫护的是真缺陷 —— 不为一个属性去放宽它。
         "network",
+        # 这一发在 HTTP 档内部重发了几次（连接失败与 429/5xx 都算）。server 把它
+        # 抄进 ResponseModel.retry_count；缓存命中没有这一格，回放也不该声称
+        # 自己重发过。
+        "retries",
     )
 
     def __init__(
@@ -234,6 +240,7 @@ class Response:
         self._reason = reason or ""
         self._cookies = cookies or {}
         self._meta_refresh = meta_refresh
+        self.retries = 0
         self.network: Optional[Dict[str, Any]] = None
         self._root: Any = None  # 惰性构建的 lxml 树
         self._content_cached: Optional[str] = None
@@ -579,6 +586,34 @@ _BODY_HEADERS = ("content-type", "content-length")
 # web_request 告诉调用方写只离开一次，所以这道闸问的是「这个动词能不能改变状态」，不是
 # 「规范说这个动词会不会收敛」。
 _RETRY_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# 瞬时状态只在**同一次调用**里再问一次：429 是限流、502/503/504 是网关/上游抖动，四者
+# 的共同点是「再发一次可能不同」。403（反爬墙）与 404/410（没有这页）不在这一列 ——
+# 前者要换指纹，后者换几次都是同一页；它们继续交给升级/归档路径。
+# Retry-After 一旦超过这个帽就不睡：睡 30s 只会把一次本来该交给浏览器的调用拖过宿主
+# 超时，而「现在返回 429，让上层升级」比「在预算里等」更值。
+_STATUS_RETRY_STATUSES = frozenset({429, 502, 503, 504})
+_STATUS_RETRY_MAX_WAIT_S = 5.0
+
+
+def _retry_after_seconds(headers: Dict[str, str], fallback: float) -> float:
+    """Retry-After 的秒数（delta-seconds 或 HTTP-date）；坏值退回 fallback。"""
+    raw = ""
+    for key, value in (headers or {}).items():
+        if str(key).lower() == "retry-after":
+            raw = str(value or "").strip()
+            break
+    if raw:
+        try:
+            if raw.isdigit():
+                return max(0.0, float(raw))
+            when = parsedate_to_datetime(raw)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return max(0.0, float(fallback))
 
 
 def _host_of(url: str) -> str:
@@ -1277,9 +1312,37 @@ class HTTPSession:
                         break
                 encoding = _extract_encoding(ct)
 
+                # 瞬时状态（429/502/503/504）只对不会改状态的动词再问一次。
+                # 403 不在这里：它要换指纹（升级到浏览器），再发一次同样的请求只会
+                # 再被拒一次；5xx 的「服务器错误」也不是靠重发解决的，但网关抖动
+                # （502/503/504）常常一次就恢复，值得一发。
+                status_code = int(getattr(resp, "status_code", 0) or 0)
+                if (status_code in _STATUS_RETRY_STATUSES
+                        and method in _RETRY_SAFE_METHODS
+                        and attempt < actual_retries):
+                    _fallback = min(
+                        _STATUS_RETRY_MAX_WAIT_S,
+                        max(0.0, self._retry_delay) * (2 ** attempt),
+                    )
+                    _delay = _retry_after_seconds(resp_headers, _fallback)
+                    if _delay <= _STATUS_RETRY_MAX_WAIT_S:
+                        logger.warning(
+                            "HTTP %s from %s on attempt %d; retrying in %.1fs "
+                            "(status retry %d/%d)",
+                            status_code, url, attempt + 1, _delay,
+                            attempt + 1, actual_retries + 1)
+                        await asyncio.sleep(_delay)
+                        continue
+                    # Retry-After 太长：睡过去只会把这次调用拖过宿主超时，交给
+                    # 上层（升级/归档）比在预算里等更值。
+                    logger.info(
+                        "HTTP %s from %s; Retry-After %.1fs exceeds the %.1fs "
+                        "status-retry cap - returning it for escalation",
+                        status_code, url, _delay, _STATUS_RETRY_MAX_WAIT_S)
+
                 resp_cookies = _resp_cookies(resp)
 
-                return Response(
+                out = Response(
                     url=final_url if final_url else (str(resp.url) if hasattr(resp, "url") else url),
                     body=resp.content if hasattr(resp, "content") else b"",
                     status=resp.status_code if hasattr(resp, "status_code") else 0,
@@ -1290,6 +1353,8 @@ class HTTPSession:
                     meta_refresh=({"from": meta_from, "delay_s": meta_delay,
                                    "hops": meta_hops} if meta_hops else None),
                 )
+                out.retries = attempt
+                return out
 
             except SecurityError:
                 # SSRF 守卫的拒绝不可能靠再问一遍解决。重试会重新拨号、重走同一条链、

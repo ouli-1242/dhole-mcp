@@ -272,7 +272,7 @@ When searching without fetching: rank by `relevance_score` / `fetch_relevance` (
 {"query": "MCP streamable HTTP spec", "fetch_content": true, "fetch_min_consensus": 2}
 ```
 
-**Ask the keyless vertical pools** (`sources` takes `web`, `news`, `academic`, `qa`, `code`, `community`; omitting `web` means vertical-only, and `engines=` is then refused). Vertical rows carry an **empty** `engines_consensus`; `source_detail` reports each source's `count` and `delivered`:
+**Ask the keyless vertical pools** (`sources` takes `web`, `news`, `academic`, `qa`, `code`, `community`, `package`, `repo`, `reference`; omitting `web` means vertical-only, and `engines=` is then refused). Vertical rows carry an **empty** `engines_consensus`; `source_detail` reports each source's `count` and `delivered`:
 ```json
 {"query": "asyncio task group", "sources": ["qa", "code", "community"], "sort": "newest", "max_results": 8}
 {"query": "transformer architecture", "sources": ["academic"], "after": "2024-06-01", "sort": "newest"}
@@ -282,7 +282,7 @@ When searching without fetching: rank by `relevance_score` / `fetch_relevance` (
 ## Big site: map, scope, read (web_discover then web_read)
 
 ```json
-// Step 1: whole-site URL map in one request (web_discover)
+// Step 1: whole-site URL map from the site's own index (web_discover)
 {"url": "https://docs.example.com", "sitemap": true}
 // Step 2: scope the map to a subtree ('/guide' matches /guide and below, NOT /guide-old; the only wildcard is a trailing /*)
 {"url": "https://docs.example.com", "path_include": "/guide", "max_pages": 30}

@@ -6,6 +6,36 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [17.7] - 2026-10-31
+
+### 新增
+
+- **免费源全方面加固：纵向源从 7 类扩到 8 类，免密纵向后端从 11 个扩到 18 个。** `news` 增加 Bing News RSS（链接从 `apiclick.aspx?url=` 包装里解出发布者真链，只交第一页并如实说明没有 page 偏移）；`academic` 增加 OpenAlex（倒排摘要重建，与 arXiv/Crossref 按标题去重）；`community` 增加 Reddit（走 PullPush 公开归档；reddit.com 的无登录 JSON 实测 403）；`package` 增加 RubyGems / NuGet / Packagist（仍是精确包名，Packagist 要 `vendor/package`）；新增 `reference` 类，用 Wikipedia 搜索 API 回答条目与摘要——它是竖源，不是网页索引家族，`engines_consensus` 仍为空。`news` 的 GDELT 与 Bing News 同标题只留先到的一行。
+
+- **keyed 第 7 颗 `google_cse`：官方 Google 索引，补上家族缺失。** 它走 Google Programmable Search JSON API，需要 `DHOLE_GOOGLE_API_KEY` + `DHOLE_GOOGLE_CX` 两个值（只有 key 时在请求前报鉴权错误，不伪装成空结果）；免费额度约 100 次/天。索引家族记 `google`，`num` 钳到 CSE 的 10 条上限，日期走 `dateRestrict`；`engines=` 单次上限随注册表从 18 变 19。默认池不变（仍 12 家免密 / 9 家族），它只在点名时调用。
+
+- **文档与 schema 同步**：`web_search.sources` 增加 `reference`，`source` / `sources_used` / `source_detail` 的字段说明与 README、技能手册、`dhole search --sources` 的枚举一起更新；`docs` 里的包与仓库入口仍要求精确名。
+
+### 变更
+
+- **连接面文案清理：33,912 → 32,687 字符。** 删掉重复的 timeout 理由、`cred_defaults` / `sys_state` 与参数说明之间的重复枚举、`doc_parse` / `web_read` 的同一句 pages、`web_search.terse` 的整段字段清单；同时补上四条会改变调用决策的事实：`urls=` 批量里单条失败不拖垮整批、`web_act` 某一步失败后链继续、`deadline_ms` 到点后已读页返回且 `next_resume_token` 可续、`web_crawl.schema` 的真实形状（CSS `{properties:…}`，不是 JSON Schema）。顺带纠正三句：缓存并非一律 1h（页面 1h / 搜索 5m）、搜索不是「从不返回正文」（`fetch_content=true` 会取前 3 页正文）、`sitemap=true` 也不是「一个请求」（索引型 sitemap 会递归子项，可能发几次请求）。
+
+- **同一页面不再因写法不同占两行**：搜索去重现在把默认端口（`http:80` / `https:443`）与 `www.` 前缀视为同一个地址，并补齐了邮件 / 点击类跟踪参数（`msclkid`、`yclid`、`_hsenc`、`mkt_tok`、`trk` 等）。真正不同的 query 参数（`?page=2` 与 `?page=3`）仍然分开；带 userinfo 的 URL 不做改写。
+
+- **`engine_detail` 每一行带 `duration_ms`**：这家引擎这一轮从发车到回话的墙钟，随缓存回放一起交回；硬截止时仍在飞的那几家不补 0，缺席即未观测。分开「这个索引该换掉」与「我们的期限太短」不再靠猜。
+
+- **sitemap 里的新日期在同分时先走**：同一份文档的多个语言副本分数相同时，`<lastmod>` 较新的那条先当代表；没写日期或日期不可解析的条目回到文档序，不会被当成「刚刚更新」。
+
+### 修复
+
+- **429/502/503/504 得到一次有帽的重试**：HTTP 档在 `Retry-After` ≤ 5s 时按它等待后重发（最多到本调用原有的次数上限），超过 5s 就带着响应头返回给升级链，而不是在进程里干等；POST 等非幂等方法不重放，403 不重试。`retry_count` 现在也把这类重发算进去。
+
+- **短拦截页更多能被自己的一句话点名**：`verify you are human`、`checking if the site connection is secure`、`访问过于频繁`、`服务暂时不可用` 等新词进入墙 / 软失败判据，仍受长度闸约束，长文章不会被误判。
+
+- **写门拒答不再暗示你存过凭据**：本机什么都没存时，`web_request` 的 POST/PUT/PATCH/DELETE 拒答仍说 “stored credentials … ride along automatically”。改成 “any stored credentials …”，与 elicitation 弹窗同一句话——两种连接说的是同一件「有才随行」的条件事实。
+
+钉 `tests/test_a_default_port_and_www_do_not_make_a_second_search_row.py`、`tests/test_each_engine_row_says_how_long_it_took.py`、`tests/test_a_sitemap_entry_with_a_fresher_date_is_picked_first.py`、`tests/test_a_transient_http_status_gets_one_bounded_retry.py` 与 `tests/test_a_short_interstitial_is_named_by_its_own_sentence.py`。
+
 ## [17.6] - 2026-10-29
 
 搜索回执的可信度与内容链路的边界：修掉一批「看起来成功、判词却与事实相反」的格子，并给批量搜索一颗可选的省字开关。
@@ -901,6 +931,8 @@ agent 技能随包分发；修掉「代理环境下抓不了本机服务」这�
 ### 修复
 
 - **日志凭据泄漏**：重试时会把含 `user:pass@` 的代理 URL 写进日志。
+
+[17.7]: https://github.com/ouli-1242/dhole-mcp/compare/v17.6...v17.7
 
 [17.6]: https://github.com/ouli-1242/dhole-mcp/compare/v17.5...v17.6
 

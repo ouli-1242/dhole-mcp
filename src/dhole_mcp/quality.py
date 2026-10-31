@@ -305,9 +305,13 @@ _BOT_WALL_PATH_SIGNALS = (
 _BOT_WALL_CONTENT_SIGNALS = (
     "此验证码用于确认", "请输入验证码", "安全验证", "人机验证", "访问验证",
     "请完成验证", "您的访问出错了", "verifycode", "checkcode",
-    "please verify you are a human", "checking your browser", "are you a robot",
+    "please verify you are a human", "verify you are human",
+    "verifying you are human", "checking your browser", "are you a robot",
+    "checking if the site connection is secure",
+    "enable javascript and cookies to continue", "please enable cookies",
     "unusual traffic", "access denied", "request blocked", "blocked your request",
     "captcha-delivery.com", "enter the captcha", "solve the captcha",
+    "attention required", "just a moment",
 )
 # 校验页不会有大段真正的文章。超过这个字符数就按「只是提到了验证」的正文处理，不再判墙。
 _BOT_WALL_MAX_TEXT_CHARS = 1500
@@ -341,7 +345,11 @@ _SOFT_FAILURE_SIGNALS = (
     "something went wrong", "this page isn't working",
     "an error occurred", "an error has occurred",
     "please wait...", "please wait…",
+    "temporarily unavailable", "service temporarily unavailable",
+    "too many requests", "rate limit exceeded", "request rate limit exceeded",
+    "please wait while we verify",
     "页面加载失败", "加载失败", "请稍后重试", "网络异常",
+    "访问过于频繁", "请求过于频繁", "服务暂时不可用", "请稍候再试",
 )
 # 超过这个字符数就按「只是提到了失败」的正文处理，不再判。
 _SOFT_FAILURE_MAX_TEXT_CHARS = 600
